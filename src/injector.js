@@ -908,10 +908,19 @@ else { window.__n8nPreviewLoaded = true;
   }
 
   function binaryUrl(id) {
+    // XSS guard: reject any non-string or obviously malicious IDs
+    if (!id || typeof id !== 'string') return '';
+    if (/^javascript:/i.test(id.trim())) return '';
+
     // Convert filesystem-v2:<path> → /n8n-preview/binary/<path>
     // This serves directly from the Docker volume via Nginx (no session/browserId needed)
-    if (id && id.startsWith('filesystem-v2:')) {
-      return '/n8n-preview/binary/' + id.slice('filesystem-v2:'.length);
+    if (id.startsWith('filesystem-v2:')) {
+      // Path traversal guard: normalize the path, reject anything with ..
+      const rawPath = id.slice('filesystem-v2:'.length);
+      if (rawPath.includes('..') || rawPath.includes('\0')) return '';
+      // Encode each path segment (but not the slashes)
+      const safePath = rawPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+      return '/n8n-preview/binary/' + safePath;
     }
     // Fallback for other storage backends
     return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`;
