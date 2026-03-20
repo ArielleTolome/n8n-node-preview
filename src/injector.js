@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.2.0';
+  const VERSION = '2.3.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -353,12 +353,20 @@ else { window.__n8nPreviewLoaded = true;
         outline: 2px solid rgba(255,152,0,0.45) !important;
         outline-offset: 2px;
         border-radius: 10px;
+        overflow: visible !important;
       }
       .n8n-preview-dedicated-node .n8n-preview-container {
         min-width: 240px;
+        overflow: visible !important;
       }
       .n8n-preview-dedicated-node .n8n-preview-item {
         border-color: rgba(255,152,0,0.2);
+      }
+      .n8n-preview-camera-badge {
+        font-size: 12px;
+        vertical-align: middle;
+        opacity: 0.85;
+        pointer-events: none;
       }
       .n8n-preview-node-label {
         display: inline-block;
@@ -1410,7 +1418,50 @@ else { window.__n8nPreviewLoaded = true;
 
     node.style.position = node.style.position || 'relative';
     node.appendChild(badge);
-    if (previewsEnabled) { node.appendChild(header); node.appendChild(container); }
+
+    if (previewsEnabled) {
+      // For dedicated Preview nodes: try to inject inside the node card element
+      let mountTarget = node;
+      if (isPNode) {
+        // Try multiple selectors to find the inner card content area
+        for (const sel of [
+          '[data-test-id="canvas-node-content"]',
+          '.node-default',
+          '.node-creator-item',
+          '.vue-flow__node-default',
+          '[class*="nodeContent"]',
+          '[class*="node-content"]',
+        ]) {
+          const inner = node.querySelector(sel);
+          if (inner) { mountTarget = inner; break; }
+        }
+        // Allow overflow so previews extend beyond node card bounds
+        node.style.overflow = 'visible';
+        if (mountTarget !== node) mountTarget.style.overflow = 'visible';
+
+        // Add 📸 camera badge to the node name area if not already present
+        if (!node.querySelector('.n8n-preview-camera-badge')) {
+          for (const sel of [
+            '[data-test-id="canvas-node-name"]',
+            '.node-name', '[class*="NodeName"]', '[class*="node-name"]',
+            '[class*="nodeName"]', '[class*="node-title"]', '[class*="nodeTitle"]',
+          ]) {
+            const nameEl = node.querySelector(sel);
+            if (nameEl) {
+              const cam = document.createElement('span');
+              cam.className = 'n8n-preview-camera-badge';
+              cam.textContent = ' 📸';
+              cam.style.cssText = 'font-size:12px;vertical-align:middle;opacity:0.85;';
+              nameEl.appendChild(cam);
+              break;
+            }
+          }
+        }
+      }
+
+      mountTarget.appendChild(header);
+      mountTarget.appendChild(container);
+    }
 
     const tsTimer = setInterval(() => {
       if (!document.contains(tsEl)) { clearInterval(tsTimer); return; }
