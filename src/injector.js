@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.5';
+  const VERSION = '2.0.6';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -2094,7 +2094,9 @@ else { window.__n8nPreviewLoaded = true;
   // Patch extractBinaryFromExecution to cap at MAX_BINARY_ITEMS
   const _origExtract = extractBinaryFromExecution;
   extractBinaryFromExecution = function (executionData) {
-    const nodeMap = _origExtract(executionData);
+    const result = _origExtract(executionData);
+    const nodeMap = result.nodeMap || result;
+    const errorMap = result.errorMap || new Map();
     let totalItems = 0;
     for (const [, bins] of nodeMap) totalItems += bins.length;
 
@@ -2112,7 +2114,7 @@ else { window.__n8nPreviewLoaded = true;
         remaining -= Math.min(bins.length, remaining);
       }
     }
-    return nodeMap;
+    return { nodeMap, errorMap };
   };
 
 
