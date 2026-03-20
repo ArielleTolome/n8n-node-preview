@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.4.0';
+  const VERSION = '2.5.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -43,6 +43,7 @@ else { window.__n8nPreviewLoaded = true;
     previewSize: 'medium',
     autoShow: true,
     showVideos: true,
+    gridColumns: 'auto',
   };
 
   let lastExecutionId = null;
@@ -103,6 +104,9 @@ else { window.__n8nPreviewLoaded = true;
         maxItems: typeof p.maxItems === 'number' ? p.maxItems : null,
         showFilename: typeof p.showFilename === 'boolean' ? p.showFilename : true,
         autoExpand: typeof p.autoExpand === 'boolean' ? p.autoExpand : true,
+        gridLayout: p.gridLayout || 'auto',
+        captionTemplate: p.captionTemplate || '',
+        showDimensions: typeof p.showDimensions === 'boolean' ? p.showDimensions : true,
       };
     } catch (e) {
       console.warn('[N8N Preview] Could not fetch workflow params:', e.message);
@@ -647,6 +651,25 @@ else { window.__n8nPreviewLoaded = true;
         color: #aaa; font-size: 6px; font-family: monospace;
         border-radius: 3px 0 0 0; line-height: 1.4;
       }
+      .n8n-preview-dim-label {
+        position: absolute; bottom: 2px; left: 2px;
+        background: rgba(0,0,0,0.65); color: #fff; font-size: 9px;
+        padding: 1px 4px; border-radius: 3px; font-family: monospace;
+        pointer-events: none; line-height: 1.4;
+      }
+      .n8n-preview-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 4px; width: 100%;
+      }
+      .n8n-preview-grid.cols-1 { grid-template-columns: 1fr; }
+      .n8n-preview-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+      .n8n-preview-caption {
+        font-size: 10px; color: #ccc; text-align: center;
+        padding: 2px 4px; word-break: break-word; line-height: 1.3;
+      }
+      html[data-theme="light"] .n8n-preview-caption,
+      body.light .n8n-preview-caption { color: #555; }
+      html[data-theme="light"] .n8n-preview-dim-label,
+      body.light .n8n-preview-dim-label { background: rgba(0,0,0,0.5); }
 
       .n8n-lightbox-json {
         max-width: 80vw; max-height: 80vh; overflow: auto;
@@ -792,6 +815,20 @@ else { window.__n8nPreviewLoaded = true;
     });
     sizeRow.appendChild(sizeLabel); sizeRow.appendChild(sizeSelect);
     panel.appendChild(sizeRow);
+
+    const gridRow = document.createElement('div'); gridRow.className = 'n8n-settings-row';
+    const gridLabel = document.createElement('span'); gridLabel.textContent = 'Grid columns';
+    const gridSelect = document.createElement('select'); gridSelect.className = 'n8n-settings-select';
+    const gridOpts = [['auto', 'Auto (2-col)'], ['1', '1 column'], ['2', '2 columns'], ['3', '3 columns']];
+    for (const [val, lbl] of gridOpts) {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = lbl;
+      if ((settings.gridColumns || 'auto') === val) o.selected = true;
+      gridSelect.appendChild(o);
+    }
+    gridSelect.addEventListener('change', () => saveSettings({ gridColumns: gridSelect.value }));
+    gridRow.appendChild(gridLabel); gridRow.appendChild(gridSelect);
+    panel.appendChild(gridRow);
 
     const clearBtn = document.createElement('button');
     clearBtn.className = 'n8n-settings-btn'; clearBtn.textContent = 'Clear All Previews';
@@ -958,8 +995,9 @@ else { window.__n8nPreviewLoaded = true;
   }
 
   // ─── Preview Creation ───────────────────────────────────
-  function createImagePreview(item) {
+  function createImagePreview(item, opts) {
     const sz = getItemSize();
+    const showDims = opts && opts.showDimensions === false ? false : true;
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
     w.style.height = sz + 'px';
@@ -978,6 +1016,16 @@ else { window.__n8nPreviewLoaded = true;
         img.dataset.finalError = '1';
       }
     };
+    if (showDims) {
+      img.addEventListener('load', () => {
+        if (!w.querySelector('.n8n-preview-dim-label') && img.naturalWidth && img.naturalHeight) {
+          const dimLabel = document.createElement('div');
+          dimLabel.className = 'n8n-preview-dim-label';
+          dimLabel.textContent = img.naturalWidth + '\u00D7' + img.naturalHeight;
+          w.appendChild(dimLabel);
+        }
+      }, { once: true });
+    }
     const ov = document.createElement('div');
     ov.className = 'n8n-preview-overlay';
     ov.textContent = item.fileName || (item.mimeType.split('/')[1] || '').toUpperCase();
@@ -985,8 +1033,9 @@ else { window.__n8nPreviewLoaded = true;
     w.appendChild(createActionButtons(item));
     const szLabel = createSizeLabel(item);
     if (szLabel) w.appendChild(szLabel);
+    w._previewItem = item;
     w.addEventListener('click', (e) => {
-      e.stopPropagation(); openLightbox(img.src, item.mimeType, item.fileName || 'image');
+      e.stopPropagation(); openLightbox(img.src, item.mimeType, item.fileName || 'image', item);
     });
     return w;
   }
@@ -1347,9 +1396,9 @@ else { window.__n8nPreviewLoaded = true;
     return w;
   }
 
-  function createPreviewForItem(item) {
+  function createPreviewForItem(item, opts) {
     const mime = item.mimeType || '';
-    if (mime.startsWith('image/')) return createImagePreview(item);
+    if (mime.startsWith('image/')) return createImagePreview(item, opts);
     if (mime.startsWith('video/') && settings.showVideos) return createVideoPreview(item);
     if (mime === 'application/pdf') return createPdfPreview(item);
     if (mime === 'application/json' || mime.endsWith('+json')) return createJsonPreview(item);
@@ -1462,8 +1511,47 @@ else { window.__n8nPreviewLoaded = true;
     // full = auto height, 100% width
     if (sz === 0) { container.style.height = 'auto'; container.style.width = '100%'; }
 
-    for (const item of visible) {
-      container.appendChild(createPreviewForItem(item));
+    // Apply grid layout: auto = 2-col when ≥2 image items; honour explicit setting
+    const imageCount = previewItems.filter(b => b.mimeType.startsWith('image/')).length;
+    const gridSetting = (nodeParams && nodeParams.gridLayout) || settings.gridColumns || 'auto';
+    let gridCols = 0; // 0 = no grid (vertical stack)
+    if (gridSetting === '1') {
+      gridCols = 1;
+    } else if (gridSetting === '2') {
+      gridCols = 2;
+    } else if (gridSetting === '3') {
+      gridCols = 3;
+    } else if (gridSetting === 'auto' && imageCount >= 2) {
+      gridCols = 2;
+    }
+    if (gridCols >= 1) {
+      container.classList.add('n8n-preview-grid');
+      if (gridCols === 1) container.classList.add('cols-1');
+      if (gridCols === 3) container.classList.add('cols-3');
+      container.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
+    }
+
+    const itemOpts = {
+      showDimensions: nodeParams ? nodeParams.showDimensions !== false : true,
+      captionTemplate: nodeParams ? (nodeParams.captionTemplate || '') : '',
+    };
+
+    for (let idx = 0; idx < visible.length; idx++) {
+      const item = visible[idx];
+      const previewEl = createPreviewForItem(item, itemOpts);
+      container.appendChild(previewEl);
+      // Caption template rendering
+      if (itemOpts.captionTemplate) {
+        const cap = document.createElement('div');
+        cap.className = 'n8n-preview-caption';
+        cap.textContent = itemOpts.captionTemplate
+          .replace(/\{\{\$index\+1\}\}/g, String(idx + 1))
+          .replace(/\{\{\$index\}\}/g, String(idx))
+          .replace(/\{\{fileName\}\}/g, item.fileName || '')
+          .replace(/\{\{fileSize\}\}/g, formatSize(item.fileSize))
+          .replace(/\{\{mimeType\}\}/g, item.mimeType || '');
+        container.appendChild(cap);
+      }
     }
 
     if (remaining > 0) {
