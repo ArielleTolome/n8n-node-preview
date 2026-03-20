@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v1.3.0
+ * N8N Node Preview Injector v2.0.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.3.0';
+  const VERSION = '2.0.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -25,6 +25,7 @@
   const DEBOUNCE_MS = 150;
   const WS_RECONNECT_DELAY = 3000;
   const WS_MAX_RETRIES = 5;
+  const MAX_BINARY_ITEMS = 50;
 
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
   if (isAlreadyLoaded()) return;
@@ -398,6 +399,49 @@
         border: 1px solid rgba(255,255,255,0.1);
       }
       .n8n-compare-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+      .n8n-preview-error-state {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        padding: 6px 8px; margin-top: 4px; gap: 2px;
+        background: rgba(239,83,80,0.08); border: 1px solid rgba(239,83,80,0.2);
+        border-radius: 6px; animation: n8nPreviewFadeIn 0.3s ease-out;
+      }
+      .n8n-preview-error-icon { font-size: 16px; line-height: 1; }
+      .n8n-preview-error-msg {
+        font-size: 9px; color: #ef5350; font-family: monospace;
+        max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+        white-space: nowrap; text-align: center;
+      }
+      .n8n-preview-truncated {
+        font-size: 9px; color: #ff9800; padding: 2px 8px;
+        text-align: center; font-style: italic;
+      }
+
+      /* Dark/light theme adaptation */
+      html[data-theme="light"] #${SETTINGS_ID},
+      html[data-theme="light"] #${HISTORY_ID},
+      body.light #${SETTINGS_ID},
+      body.light #${HISTORY_ID} {
+        background: #f5f5f5; color: #333; border-color: #ddd;
+      }
+      html[data-theme="light"] .n8n-preview-item,
+      body.light .n8n-preview-item {
+        background: #f0f0f0; border-color: rgba(0,0,0,0.1);
+      }
+      html[data-theme="light"] .n8n-settings-toggle,
+      body.light .n8n-settings-toggle { background: #ccc; }
+      html[data-theme="light"] .n8n-settings-select,
+      body.light .n8n-settings-select { background: #e8e8e8; color: #333; border-color: #ccc; }
+      html[data-theme="light"] .n8n-hist-item:hover,
+      body.light .n8n-hist-item:hover { background: rgba(255,152,0,0.08); }
+      html[data-theme="light"] .n8n-preview-json-box,
+      body.light .n8n-preview-json-box { background: #f5f5f5; color: #0277bd; }
+      html[data-theme="light"] .n8n-preview-csv-table,
+      body.light .n8n-preview-csv-table { background: #f5f5f5; color: #333; }
+      html[data-theme="light"] .n8n-preview-file-icon,
+      body.light .n8n-preview-file-icon { background: #f0f0f0; }
+      html[data-theme="light"] .n8n-preview-file-label,
+      body.light .n8n-preview-file-label { color: #666; }
 
       #${LIGHTBOX_ID} {
         display: none; position: fixed; inset: 0; z-index: 999999;
