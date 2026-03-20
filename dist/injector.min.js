@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v0.5.0
+ * N8N Node Preview Injector v1.0.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.5.0';
+  const VERSION = '1.0.0';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
@@ -18,7 +18,9 @@
   const LIGHTBOX_ID = 'n8n-preview-lightbox';
   const POLL_INTERVAL = 4000;
   const MAX_ITEMS_VISIBLE = 4;
+  const MAX_CACHED_EXECUTIONS = 3;
   const VIDEO_INLINE_MAX_BYTES = 5 * 1024 * 1024;
+  const DEBOUNCE_MS = 150;
 
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
   if (isAlreadyLoaded()) return;
@@ -36,12 +38,13 @@
   let lastExecutionId = null;
   let settings = loadSettings();
   let previewsEnabled = settings.enabled !== false;
+  /** @type {Map<string, {items: Array, timestamp: number, executionId: string}>} */
   const previewCache = new Map();
+  let executionCount = 0;
 
   function loadSettings() {
-    try {
-      return { ...defaultSettings, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) };
-    } catch { return { ...defaultSettings }; }
+    try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) }; }
+    catch { return { ...defaultSettings }; }
   }
 
   function saveSettings(s) {
@@ -49,9 +52,14 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }
 
-  // ─── Size map ───────────────────────────────────────────
   const sizeMap = { small: 48, medium: 64, large: 96 };
   function getItemSize() { return sizeMap[settings.previewSize] || 64; }
+
+  // ─── Debounce utility ───────────────────────────────────
+  function debounce(fn, ms) {
+    let timer;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+  }
 
   // ─── CSS ────────────────────────────────────────────────
   const injectStyles = () => {
@@ -75,7 +83,6 @@
         to { opacity: 1; transform: translateY(0); }
       }
 
-      /* Toggle + Settings buttons */
       .n8n-preview-fab-group {
         position: fixed; bottom: 20px; right: 20px;
         display: flex; flex-direction: column-reverse; gap: 8px;
@@ -89,9 +96,7 @@
         transition: transform 0.2s, opacity 0.2s; line-height: 1;
       }
       .n8n-preview-fab:hover { transform: scale(1.1); }
-      .n8n-preview-fab-primary {
-        background: linear-gradient(135deg, #ff9800, #ff5722);
-      }
+      .n8n-preview-fab-primary { background: linear-gradient(135deg, #ff9800, #ff5722); }
       .n8n-preview-fab-primary.disabled { background: #666; opacity: 0.7; }
       .n8n-preview-fab-secondary {
         width: 36px; height: 36px; font-size: 16px;
@@ -99,15 +104,13 @@
       }
       .n8n-preview-fab-secondary:hover { background: #444; }
 
-      /* Settings Panel */
       #${SETTINGS_ID} {
         position: fixed; bottom: 80px; right: 20px;
         width: 240px; background: #1e1e2e; border: 1px solid #333;
         border-radius: 12px; padding: 16px; z-index: 99998;
         box-shadow: 0 8px 24px rgba(0,0,0,0.4);
         font-family: system-ui, sans-serif; font-size: 12px; color: #ccc;
-        display: none;
-        animation: n8nPreviewFadeIn 0.2s ease-out;
+        display: none; animation: n8nPreviewFadeIn 0.2s ease-out;
       }
       #${SETTINGS_ID}.open { display: block; }
       .n8n-settings-title {
@@ -133,18 +136,18 @@
       .n8n-settings-toggle.on::after { transform: translateX(16px); }
       .n8n-settings-select {
         background: #333; color: #ccc; border: 1px solid #555;
-        border-radius: 6px; padding: 3px 8px; font-size: 11px;
-        cursor: pointer; outline: none;
+        border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; outline: none;
       }
       .n8n-settings-btn {
         width: 100%; margin-top: 10px; padding: 6px 12px;
         background: #333; color: #ef5350; border: 1px solid #555;
-        border-radius: 6px; cursor: pointer; font-size: 11px;
-        transition: background 0.2s;
+        border-radius: 6px; cursor: pointer; font-size: 11px; transition: background 0.2s;
       }
       .n8n-settings-btn:hover { background: #444; }
+      .n8n-settings-version {
+        margin-top: 8px; text-align: center; font-size: 10px; color: #555;
+      }
 
-      /* Preview container */
       .n8n-preview-container {
         display: flex; flex-wrap: nowrap; gap: 6px;
         padding: 6px 8px; margin-top: 4px;
@@ -166,11 +169,6 @@
       }
       .n8n-preview-timestamp { opacity: 0.7; }
       .n8n-preview-output-label { color: #ff9800; font-weight: 600; }
-      .n8n-preview-collapse {
-        background: none; border: none; color: #666; cursor: pointer;
-        font-size: 12px; padding: 0 2px; transition: color 0.2s;
-      }
-      .n8n-preview-collapse:hover { color: #ff9800; }
 
       .n8n-preview-item {
         position: relative; flex-shrink: 0;
@@ -184,6 +182,11 @@
       .n8n-preview-item img, .n8n-preview-item video {
         width: 100%; height: 100%; object-fit: cover; display: block;
       }
+      .n8n-preview-item-error {
+        display: flex; align-items: center; justify-content: center;
+        color: #ef5350; font-size: 9px; text-align: center;
+        width: 100%; height: 100%; padding: 4px;
+      }
 
       .n8n-preview-overlay {
         position: absolute; bottom: 0; left: 0; right: 0;
@@ -191,7 +194,6 @@
         color: #fff; font-size: 8px; text-align: center;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2;
       }
-
       .n8n-preview-more {
         display: flex; align-items: center; justify-content: center;
         flex-shrink: 0; border-radius: 6px;
@@ -207,14 +209,12 @@
         pointer-events: none; transition: background 0.15s;
       }
       .n8n-preview-item:hover .n8n-preview-video-play { background: rgba(0,0,0,0.2); }
-
       .n8n-preview-meta {
         position: absolute; top: 2px; left: 2px;
         padding: 1px 4px; background: rgba(0,0,0,0.6);
         color: #ff9800; font-size: 7px; font-weight: 600;
         border-radius: 3px; text-transform: uppercase; line-height: 1.3;
       }
-
       .n8n-preview-count-badge {
         position: absolute; top: -6px; right: -6px;
         min-width: 18px; height: 18px; padding: 0 5px;
@@ -224,7 +224,6 @@
         box-shadow: 0 1px 4px rgba(0,0,0,0.3); z-index: 10;
         pointer-events: none; line-height: 1;
       }
-
       .n8n-preview-dismiss {
         background: none; border: none; color: #666; cursor: pointer;
         font-size: 14px; padding: 0 2px; margin-left: auto;
@@ -232,19 +231,6 @@
       }
       .n8n-preview-dismiss:hover { color: #ef5350; }
 
-      /* Execution running indicator */
-      .n8n-preview-running {
-        position: absolute; top: -4px; left: -4px;
-        width: 10px; height: 10px; border-radius: 50%;
-        background: #ff9800; z-index: 10;
-        animation: n8nPreviewPulse 1.5s ease-in-out infinite;
-      }
-      @keyframes n8nPreviewPulse {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.4; transform: scale(1.3); }
-      }
-
-      /* Lightbox */
       #${LIGHTBOX_ID} {
         display: none; position: fixed; inset: 0; z-index: 999999;
         background: rgba(0,0,0,0.85);
@@ -273,12 +259,11 @@
   const injectBadge = () => {
     const tryInsert = () => {
       if (document.getElementById(BADGE_ID)) return true;
-      const sels = [
+      for (const sel of [
         'header .actions', '[class*="header"] [class*="actions"]',
         '[class*="header"] [class*="right"]', '.el-header', 'header',
         '[data-test-id="main-sidebar-toggle"]',
-      ];
-      for (const sel of sels) {
+      ]) {
         const target = document.querySelector(sel);
         if (target) {
           const badge = document.createElement('span');
@@ -307,12 +292,10 @@
     }, 10000);
   };
 
-  // ─── FAB Group (Toggle + Settings) ──────────────────────
+  // ─── FAB Group ──────────────────────────────────────────
   const injectFabGroup = () => {
     const group = document.createElement('div');
     group.className = 'n8n-preview-fab-group';
-
-    // Main toggle
     const toggleBtn = document.createElement('button');
     toggleBtn.id = TOGGLE_ID;
     toggleBtn.className = 'n8n-preview-fab n8n-preview-fab-primary' + (previewsEnabled ? '' : ' disabled');
@@ -332,20 +315,16 @@
     });
     group.appendChild(toggleBtn);
 
-    // Settings gear
     const settingsBtn = document.createElement('button');
     settingsBtn.className = 'n8n-preview-fab n8n-preview-fab-secondary';
-    settingsBtn.title = 'Preview Settings';
-    settingsBtn.textContent = '\u2699';
+    settingsBtn.title = 'Preview Settings'; settingsBtn.textContent = '\u2699';
     settingsBtn.addEventListener('click', () => {
       const panel = document.getElementById(SETTINGS_ID);
       if (panel) panel.classList.toggle('open');
     });
     group.appendChild(settingsBtn);
-
     document.body.appendChild(group);
 
-    // Ctrl+Shift+P
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); toggleBtn.click(); }
     });
@@ -355,79 +334,57 @@
   const injectSettingsPanel = () => {
     const panel = document.createElement('div');
     panel.id = SETTINGS_ID;
-
     const title = document.createElement('div');
-    title.className = 'n8n-settings-title';
-    title.textContent = '\u2699 Preview Settings';
+    title.className = 'n8n-settings-title'; title.textContent = '\u2699 Preview Settings';
     panel.appendChild(title);
 
-    // Toggle: Auto-show on execution
-    const autoRow = createSettingsRow('Auto-show on run', settings.autoShow, (val) => {
-      saveSettings({ autoShow: val });
-    });
-    panel.appendChild(autoRow);
+    panel.appendChild(createSettingsRow('Auto-show on run', settings.autoShow, v => saveSettings({ autoShow: v })));
+    panel.appendChild(createSettingsRow('Show video previews', settings.showVideos, v => saveSettings({ showVideos: v })));
 
-    // Toggle: Show videos
-    const vidRow = createSettingsRow('Show video previews', settings.showVideos, (val) => {
-      saveSettings({ showVideos: val });
-    });
-    panel.appendChild(vidRow);
-
-    // Select: Preview size
-    const sizeRow = document.createElement('div');
-    sizeRow.className = 'n8n-settings-row';
-    const sizeLabel = document.createElement('span');
-    sizeLabel.textContent = 'Preview size';
-    const sizeSelect = document.createElement('select');
-    sizeSelect.className = 'n8n-settings-select';
+    const sizeRow = document.createElement('div'); sizeRow.className = 'n8n-settings-row';
+    const sizeLabel = document.createElement('span'); sizeLabel.textContent = 'Preview size';
+    const sizeSelect = document.createElement('select'); sizeSelect.className = 'n8n-settings-select';
     for (const opt of ['small', 'medium', 'large']) {
       const o = document.createElement('option');
-      o.value = opt; o.textContent = opt;
-      if (settings.previewSize === opt) o.selected = true;
+      o.value = opt; o.textContent = opt; if (settings.previewSize === opt) o.selected = true;
       sizeSelect.appendChild(o);
     }
     sizeSelect.addEventListener('change', () => {
       saveSettings({ previewSize: sizeSelect.value });
-      // Resize existing previews
       const sz = getItemSize();
-      document.querySelectorAll('.n8n-preview-item').forEach(el => {
-        el.style.width = sz + 'px'; el.style.height = sz + 'px';
-      });
-      document.querySelectorAll('.n8n-preview-more').forEach(el => {
+      document.querySelectorAll('.n8n-preview-item, .n8n-preview-more').forEach(el => {
         el.style.width = sz + 'px'; el.style.height = sz + 'px';
       });
     });
-    sizeRow.appendChild(sizeLabel);
-    sizeRow.appendChild(sizeSelect);
+    sizeRow.appendChild(sizeLabel); sizeRow.appendChild(sizeSelect);
     panel.appendChild(sizeRow);
 
-    // Clear all button
     const clearBtn = document.createElement('button');
-    clearBtn.className = 'n8n-settings-btn';
-    clearBtn.textContent = 'Clear All Previews';
+    clearBtn.className = 'n8n-settings-btn'; clearBtn.textContent = 'Clear All Previews';
     clearBtn.addEventListener('click', () => {
       previewCache.clear();
       document.querySelectorAll('.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge').forEach(el => el.remove());
     });
     panel.appendChild(clearBtn);
 
+    const ver = document.createElement('div');
+    ver.className = 'n8n-settings-version';
+    ver.textContent = `v${VERSION}`;
+    panel.appendChild(ver);
+
     document.body.appendChild(panel);
   };
 
   function createSettingsRow(label, value, onChange) {
-    const row = document.createElement('div');
-    row.className = 'n8n-settings-row';
-    const lbl = document.createElement('span');
-    lbl.textContent = label;
+    const row = document.createElement('div'); row.className = 'n8n-settings-row';
+    const lbl = document.createElement('span'); lbl.textContent = label;
     const toggle = document.createElement('button');
     toggle.className = 'n8n-settings-toggle' + (value ? ' on' : '');
     toggle.addEventListener('click', () => {
-      const newVal = !toggle.classList.contains('on');
-      toggle.classList.toggle('on', newVal);
-      onChange(newVal);
+      const v = !toggle.classList.contains('on');
+      toggle.classList.toggle('on', v); onChange(v);
     });
-    row.appendChild(lbl);
-    row.appendChild(toggle);
+    row.appendChild(lbl); row.appendChild(toggle);
     return row;
   }
 
@@ -441,15 +398,12 @@
   };
 
   const injectLightbox = () => {
-    const lb = document.createElement('div');
-    lb.id = LIGHTBOX_ID;
+    const lb = document.createElement('div'); lb.id = LIGHTBOX_ID;
     const closeBtn = document.createElement('button');
     closeBtn.className = 'n8n-lightbox-close'; closeBtn.textContent = '\u00D7';
     lb.appendChild(closeBtn);
-    const content = document.createElement('div');
-    content.className = 'n8n-lightbox-content'; lb.appendChild(content);
-    const info = document.createElement('div');
-    info.className = 'n8n-lightbox-info'; lb.appendChild(info);
+    lb.appendChild(Object.assign(document.createElement('div'), { className: 'n8n-lightbox-content' }));
+    lb.appendChild(Object.assign(document.createElement('div'), { className: 'n8n-lightbox-info' }));
     lb.addEventListener('click', (e) => {
       if (e.target === lb || e.target === closeBtn) closeLightbox();
     });
@@ -467,9 +421,9 @@
       const img = document.createElement('img'); img.src = src; img.alt = fileName;
       content.appendChild(img);
     } else if (mimeType.startsWith('video/')) {
-      const video = document.createElement('video');
-      video.src = src; video.controls = true; video.autoplay = true; video.loop = true;
-      content.appendChild(video);
+      const v = document.createElement('video');
+      v.src = src; v.controls = true; v.autoplay = true; v.loop = true;
+      content.appendChild(v);
     }
     info.textContent = `${fileName} \u2022 ${(mimeType.split('/')[1] || '').toUpperCase()}`;
     lb.classList.add('active');
@@ -489,9 +443,7 @@
     return null;
   }
 
-  function binaryUrl(id) {
-    return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`;
-  }
+  function binaryUrl(id) { return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`; }
 
   function formatSize(bytes) {
     if (!bytes || bytes <= 0) return '';
@@ -517,6 +469,20 @@
     w.style.width = sz + 'px'; w.style.height = sz + 'px';
     const img = document.createElement('img');
     img.src = binaryUrl(item.id); img.alt = item.fileName || 'preview'; img.loading = 'lazy';
+    // Retry once on error
+    let retried = false;
+    img.onerror = () => {
+      if (!retried) {
+        retried = true;
+        setTimeout(() => { img.src = binaryUrl(item.id); }, 1000);
+      } else {
+        while (w.firstChild) w.removeChild(w.firstChild);
+        const errEl = document.createElement('div');
+        errEl.className = 'n8n-preview-item-error';
+        errEl.textContent = 'Preview unavailable';
+        w.appendChild(errEl);
+      }
+    };
     const ov = document.createElement('div');
     ov.className = 'n8n-preview-overlay';
     ov.textContent = item.fileName || (item.mimeType.split('/')[1] || '').toUpperCase();
@@ -547,13 +513,11 @@
       w.appendChild(p);
     }
     const ext = item.mimeType.split('/')[1] || 'video';
-    const meta = document.createElement('div');
-    meta.className = 'n8n-preview-meta';
+    const meta = document.createElement('div'); meta.className = 'n8n-preview-meta';
     const szStr = item.fileSize ? formatSize(item.fileSize) : '';
     meta.textContent = szStr ? `${ext} \u2022 ${szStr}` : ext;
     w.appendChild(meta);
-    const ov = document.createElement('div');
-    ov.className = 'n8n-preview-overlay';
+    const ov = document.createElement('div'); ov.className = 'n8n-preview-overlay';
     ov.textContent = item.fileName || ext.toUpperCase();
     w.appendChild(ov);
     w.addEventListener('click', (e) => {
@@ -568,8 +532,7 @@
     const node = findCanvasNode(nodeName);
     if (!node) return;
 
-    // Clean existing
-    for (const sel of ['.n8n-preview-container', '.n8n-preview-header', '.n8n-preview-count-badge', '.n8n-preview-running']) {
+    for (const sel of ['.n8n-preview-container', '.n8n-preview-header', '.n8n-preview-count-badge']) {
       const el = node.querySelector(sel);
       if (el) el.remove();
     }
@@ -579,38 +542,27 @@
     );
     if (mediaItems.length === 0) return;
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'n8n-preview-header';
-    const tsEl = document.createElement('span');
-    tsEl.className = 'n8n-preview-timestamp';
+    const header = document.createElement('div'); header.className = 'n8n-preview-header';
+    const tsEl = document.createElement('span'); tsEl.className = 'n8n-preview-timestamp';
     tsEl.textContent = timestamp ? timeAgo(timestamp) : '';
-    const countEl = document.createElement('span');
-    countEl.className = 'n8n-preview-output-label';
+    const countEl = document.createElement('span'); countEl.className = 'n8n-preview-output-label';
     const ic = mediaItems.filter(b => b.mimeType.startsWith('image/')).length;
     const vc = mediaItems.filter(b => b.mimeType.startsWith('video/')).length;
     const parts = [];
     if (ic > 0) parts.push(ic + ' img');
     if (vc > 0) parts.push(vc + ' vid');
     countEl.textContent = parts.join(' \u2022 ');
-    // Dismiss button
     const dismiss = document.createElement('button');
-    dismiss.className = 'n8n-preview-dismiss';
-    dismiss.textContent = '\u2715';
+    dismiss.className = 'n8n-preview-dismiss'; dismiss.textContent = '\u2715';
     dismiss.title = 'Dismiss preview';
     dismiss.addEventListener('click', (e) => {
-      e.stopPropagation();
-      previewCache.delete(nodeName);
+      e.stopPropagation(); previewCache.delete(nodeName);
       for (const s of ['.n8n-preview-container', '.n8n-preview-header', '.n8n-preview-count-badge']) {
-        const el = node.querySelector(s);
-        if (el) el.remove();
+        const el = node.querySelector(s); if (el) el.remove();
       }
     });
-    header.appendChild(tsEl);
-    header.appendChild(countEl);
-    header.appendChild(dismiss);
+    header.appendChild(tsEl); header.appendChild(countEl); header.appendChild(dismiss);
 
-    // Gallery
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
     const visible = mediaItems.slice(0, MAX_ITEMS_VISIBLE);
@@ -636,7 +588,6 @@
       container.appendChild(more);
     }
 
-    // Count badge (shown when previews hidden)
     const badge = document.createElement('div');
     badge.className = 'n8n-preview-count-badge';
     badge.textContent = String(mediaItems.length);
@@ -644,12 +595,8 @@
 
     node.style.position = node.style.position || 'relative';
     node.appendChild(badge);
-    if (previewsEnabled) {
-      node.appendChild(header);
-      node.appendChild(container);
-    }
+    if (previewsEnabled) { node.appendChild(header); node.appendChild(container); }
 
-    // Update timestamp
     const tsTimer = setInterval(() => {
       if (!document.contains(tsEl)) { clearInterval(tsTimer); return; }
       if (timestamp) tsEl.textContent = timeAgo(timestamp);
@@ -691,6 +638,15 @@
     const nodeMap = extractBinaryFromExecution(executionData);
     if (nodeMap.size === 0) return;
     const ts = Date.now();
+    executionCount++;
+
+    // Limit cached executions
+    if (executionCount > MAX_CACHED_EXECUTIONS) {
+      const entries = [...previewCache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const toRemove = entries.slice(0, entries.length - MAX_CACHED_EXECUTIONS * 5);
+      for (const [key] of toRemove) previewCache.delete(key);
+    }
+
     for (const [nodeName, binaries] of nodeMap) {
       previewCache.set(nodeName, { items: binaries, timestamp: ts });
       renderPreviewsOnNode(nodeName, binaries, ts);
@@ -732,9 +688,9 @@
     } catch (err) { console.warn('[N8N Preview] Poll error:', err.message); }
   }
 
-  // ─── Canvas Watcher ─────────────────────────────────────
+  // ─── Canvas Watcher (debounced) ─────────────────────────
   function watchCanvasChanges() {
-    const observer = new MutationObserver(() => {
+    const rerender = debounce(() => {
       if (!previewsEnabled) return;
       for (const [nodeName, data] of previewCache) {
         const node = findCanvasNode(nodeName);
@@ -742,7 +698,10 @@
           renderPreviewsOnNode(nodeName, data.items, data.timestamp);
         }
       }
-    });
+    }, DEBOUNCE_MS);
+
+    const observer = new MutationObserver(rerender);
+
     const start = () => {
       const canvas = document.querySelector('.vue-flow');
       if (canvas) { observer.observe(canvas, { childList: true, subtree: true }); return true; }
@@ -753,6 +712,34 @@
       wo.observe(document.body, { childList: true, subtree: true });
       setTimeout(() => wo.disconnect(), 30000);
     }
+
+    // Clean up when navigating away from editor
+    setInterval(() => {
+      if (!document.querySelector('.vue-flow') && previewCache.size > 0) {
+        observer.disconnect();
+      } else if (document.querySelector('.vue-flow') && !observer.takeRecords) {
+        start();
+      }
+    }, 5000);
+  }
+
+  // ─── Lazy loading with IntersectionObserver ─────────────
+  if ('IntersectionObserver' in window) {
+    const lazyObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          if (img.dataset.lazySrc) {
+            img.src = img.dataset.lazySrc;
+            delete img.dataset.lazySrc;
+            lazyObserver.unobserve(img);
+          }
+        }
+      }
+    }, { rootMargin: '100px' });
+
+    // Expose for use in createImagePreview
+    window.__n8nPreviewLazyObserver = lazyObserver;
   }
 
   // ─── Init ───────────────────────────────────────────────
