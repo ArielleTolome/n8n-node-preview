@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.1.0';
+  const VERSION = '2.2.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -70,8 +70,45 @@ else { window.__n8nPreviewLoaded = true;
   }
 
   // Heights for the Weavy-style large card layout (width always fills node)
-  const sizeMap = { small: 160, medium: 220, large: 300 };
-  function getItemSize() { return sizeMap[settings.previewSize] || 220; }
+  const sizeMap = { small: 160, medium: 220, large: 300, full: 0 };
+  function getItemSize(previewSize) {
+    const key = previewSize || settings.previewSize;
+    return sizeMap[key] !== undefined ? sizeMap[key] : 220;
+  }
+
+  // ─── Workflow JSON cache ─────────────────────────────────
+  // Maps workflowId → { nodes: [...], fetchedAt: timestamp }
+  const workflowCache = new Map();
+
+  // Fetch workflow JSON and cache it; returns node params for a Preview node by nodeName
+  async function getPreviewNodeParams(workflowId, nodeName) {
+    if (!workflowId) return null;
+    try {
+      let wf = workflowCache.get(workflowId);
+      if (!wf || (Date.now() - wf.fetchedAt > 30000)) {
+        const resp = await apiRequest(`/api/v1/workflows/${workflowId}`);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        wf = { nodes: data?.nodes || [], fetchedAt: Date.now() };
+        workflowCache.set(workflowId, wf);
+      }
+      const node = wf.nodes.find(n => n.name === nodeName &&
+        (n.type === PREVIEW_NODE_TYPE || (n.type || '').endsWith('.previewNode')));
+      if (!node) return null;
+      const p = node.parameters || {};
+      return {
+        previewSize: p.previewSize || null,
+        label: p.label || null,
+        itemIndex: typeof p.itemIndex === 'number' ? p.itemIndex : null,
+        maxItems: typeof p.maxItems === 'number' ? p.maxItems : null,
+        showFilename: typeof p.showFilename === 'boolean' ? p.showFilename : true,
+        autoExpand: typeof p.autoExpand === 'boolean' ? p.autoExpand : true,
+      };
+    } catch (e) {
+      console.warn('[N8N Preview] Could not fetch workflow params:', e.message);
+      return null;
+    }
+  }
 
   // ─── Debounce utility ───────────────────────────────────
   function debounce(fn, ms) {
@@ -1275,7 +1312,8 @@ else { window.__n8nPreviewLoaded = true;
   }
 
   // ─── Rendering ──────────────────────────────────────────
-  function renderPreviewsOnNode(nodeName, binaryItems, timestamp, errorMsg) {
+  // nodeParams: optional object from getPreviewNodeParams — overrides global settings for Preview nodes
+  function renderPreviewsOnNode(nodeName, binaryItems, timestamp, errorMsg, nodeParams) {
     if (!previewsEnabled && !settings.autoShow) return;
     const node = findCanvasNode(nodeName);
     if (!node) return;
@@ -1284,7 +1322,8 @@ else { window.__n8nPreviewLoaded = true;
     const isPNode = isPreviewNode(node);
     if (isPNode) {
       node.classList.add('n8n-preview-dedicated-node');
-      const lbl = getPreviewNodeLabel(node);
+      // Use label from workflow params (most accurate) or fall back to DOM detection
+      const lbl = (nodeParams && nodeParams.label) || getPreviewNodeLabel(node);
       if (lbl && !node.querySelector('.n8n-preview-node-label')) {
         const labelEl = document.createElement('div');
         labelEl.className = 'n8n-preview-node-label';
@@ -1299,11 +1338,20 @@ else { window.__n8nPreviewLoaded = true;
     }
 
     // Accept all binary items now (not just image/video)
-    const previewItems = binaryItems.filter(b => {
+    let previewItems = binaryItems.filter(b => {
       const m = b.mimeType || '';
       if (m.startsWith('video/') && !settings.showVideos) return false;
       return true;
     });
+
+    // Apply itemIndex filter from Preview node params
+    if (nodeParams && nodeParams.itemIndex !== null && nodeParams.itemIndex >= 0) {
+      previewItems = previewItems.filter((_, i) => i === nodeParams.itemIndex);
+    }
+
+    // Apply maxItems from Preview node params
+    const maxVisible = (nodeParams && nodeParams.maxItems) ? nodeParams.maxItems : MAX_ITEMS_VISIBLE;
+
     if (previewItems.length === 0) return;
 
     const header = document.createElement('div'); header.className = 'n8n-preview-header';
@@ -1331,9 +1379,12 @@ else { window.__n8nPreviewLoaded = true;
 
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
-    const visible = previewItems.slice(0, MAX_ITEMS_VISIBLE);
-    const remaining = previewItems.length - MAX_ITEMS_VISIBLE;
-    const sz = getItemSize();
+    const visible = previewItems.slice(0, maxVisible);
+    const remaining = previewItems.length - maxVisible;
+    // Use previewSize from node params if available, else global setting
+    const sz = getItemSize(nodeParams ? nodeParams.previewSize : null);
+    // full = auto height, 100% width
+    if (sz === 0) { container.style.height = 'auto'; container.style.width = '100%'; }
 
     for (const item of visible) {
       container.appendChild(createPreviewForItem(item));
@@ -1346,7 +1397,7 @@ else { window.__n8nPreviewLoaded = true;
       more.textContent = '+' + remaining;
       more.addEventListener('click', (e) => {
         e.stopPropagation();
-        const next = previewItems[MAX_ITEMS_VISIBLE];
+        const next = previewItems[maxVisible];
         if (next) openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'media');
       });
       container.appendChild(more);
@@ -1402,7 +1453,7 @@ else { window.__n8nPreviewLoaded = true;
     return { nodeMap, errorMap };
   }
 
-  function processExecution(executionData) {
+  async function processExecution(executionData) {
     const result = extractBinaryFromExecution(executionData);
     const nodeMap = result.nodeMap || result;
     const errorMap = result.errorMap || new Map();
@@ -1417,11 +1468,24 @@ else { window.__n8nPreviewLoaded = true;
       for (const [key] of toRemove) previewCache.delete(key);
     }
 
+    // Resolve workflowId from executionData or current URL
+    const workflowId = executionData?.workflowId ||
+      executionData?.workflowData?.id ||
+      location.href.split('/workflow/')[1]?.split(/[/?#]/)[0] || '';
+
     for (const [nodeName, binaries] of nodeMap) {
-      previewCache.set(nodeName, { items: binaries, timestamp: ts });
-      renderPreviewsOnNode(nodeName, binaries, ts);
+      previewCache.set(nodeName, { items: binaries, timestamp: ts, workflowId });
+      const canvasNode = findCanvasNode(nodeName);
+      const isPNode = canvasNode && isPreviewNode(canvasNode);
+      const nodeParams = isPNode ? await getPreviewNodeParams(workflowId, nodeName) : null;
+      renderPreviewsOnNode(nodeName, binaries, ts, null, nodeParams);
     }
-    for (const [nodeName, msg] of errorMap) renderPreviewsOnNode(nodeName, [], ts, msg);
+    for (const [nodeName, msg] of errorMap) {
+      const canvasNode = findCanvasNode(nodeName);
+      const isPNode = canvasNode && isPreviewNode(canvasNode);
+      const nodeParams = isPNode ? await getPreviewNodeParams(workflowId, nodeName) : null;
+      renderPreviewsOnNode(nodeName, [], ts, msg, nodeParams);
+    }
     console.log(`[N8N Preview] Rendered: ${nodeMap.size} node(s), ${errorMap.size} error(s)`);
   }
 
@@ -1470,12 +1534,14 @@ else { window.__n8nPreviewLoaded = true;
 
   // ─── Canvas Watcher (debounced) ─────────────────────────
   function watchCanvasChanges() {
-    const rerender = debounce(() => {
+    const rerender = debounce(async () => {
       if (!previewsEnabled) return;
       for (const [nodeName, data] of previewCache) {
         const node = findCanvasNode(nodeName);
         if (node && !node.querySelector('.n8n-preview-container')) {
-          renderPreviewsOnNode(nodeName, data.items, data.timestamp);
+          const isPNode = isPreviewNode(node);
+          const nodeParams = isPNode ? await getPreviewNodeParams(data.workflowId || '', nodeName) : null;
+          renderPreviewsOnNode(nodeName, data.items, data.timestamp, null, nodeParams);
         }
       }
     }, DEBOUNCE_MS);
