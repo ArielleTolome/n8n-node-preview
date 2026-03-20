@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.8';
+  const VERSION = '2.1.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -310,6 +310,32 @@ else { window.__n8nPreviewLoaded = true;
         transition: color 0.2s; line-height: 1;
       }
       .n8n-preview-dismiss:hover { color: #ef5350; }
+
+      /* ── Dedicated Preview Node (n8n-nodes-preview.previewNode) ── */
+      .n8n-preview-dedicated-node {
+        outline: 2px solid rgba(255,152,0,0.45) !important;
+        outline-offset: 2px;
+        border-radius: 10px;
+      }
+      .n8n-preview-dedicated-node .n8n-preview-container {
+        min-width: 240px;
+      }
+      .n8n-preview-dedicated-node .n8n-preview-item {
+        border-color: rgba(255,152,0,0.2);
+      }
+      .n8n-preview-node-label {
+        display: inline-block;
+        margin: 2px 8px 4px;
+        padding: 1px 8px;
+        background: rgba(255,152,0,0.15);
+        border: 1px solid rgba(255,152,0,0.35);
+        border-radius: 10px;
+        color: #ff9800;
+        font-size: 10px;
+        font-weight: 600;
+        font-family: system-ui, sans-serif;
+        letter-spacing: 0.02em;
+      }
 
       /* History Panel */
       #${HISTORY_ID} {
@@ -773,6 +799,28 @@ else { window.__n8nPreviewLoaded = true;
     lb.classList.add('active');
   }
 
+  // ─── Preview Node detection ─────────────────────────────
+  const PREVIEW_NODE_TYPE = 'n8n-nodes-preview.previewNode';
+
+  function isPreviewNode(canvasEl) {
+    if (!canvasEl) return false;
+    const t = canvasEl.getAttribute('data-node-type') || '';
+    return t === PREVIEW_NODE_TYPE || t.endsWith('.previewNode');
+  }
+
+  function getPreviewNodeLabel(canvasEl) {
+    // Try to read the Label parameter value from the node's title/subtitle DOM
+    if (!canvasEl) return null;
+    for (const sel of [
+      '[data-test-id="canvas-node-subtitle"]',
+      '.node-subtitle', '[class*="nodeSubtitle"]', '[class*="node-subtitle"]',
+    ]) {
+      const el = canvasEl.querySelector(sel);
+      if (el && el.textContent.trim()) return el.textContent.trim();
+    }
+    return null;
+  }
+
   // ─── Helpers ────────────────────────────────────────────
   function findCanvasNode(nodeName) {
     // N8N 2.x: data-node-name attribute is set directly on the .vue-flow__node element
@@ -1231,6 +1279,19 @@ else { window.__n8nPreviewLoaded = true;
     if (!previewsEnabled && !settings.autoShow) return;
     const node = findCanvasNode(nodeName);
     if (!node) return;
+
+    // Preview Node — dedicated node type gets enhanced canvas treatment
+    const isPNode = isPreviewNode(node);
+    if (isPNode) {
+      node.classList.add('n8n-preview-dedicated-node');
+      const lbl = getPreviewNodeLabel(node);
+      if (lbl && !node.querySelector('.n8n-preview-node-label')) {
+        const labelEl = document.createElement('div');
+        labelEl.className = 'n8n-preview-node-label';
+        labelEl.textContent = lbl;
+        node.appendChild(labelEl);
+      }
+    }
 
     for (const sel of ['.n8n-preview-container', '.n8n-preview-header', '.n8n-preview-count-badge']) {
       const el = node.querySelector(sel);
