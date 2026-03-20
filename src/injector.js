@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v1.2.0
+ * N8N Node Preview Injector v1.3.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
+  const COMPARE_ID = 'n8n-preview-compare';
+  const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
@@ -274,6 +276,129 @@
       }
       .n8n-preview-dismiss:hover { color: #ef5350; }
 
+      /* History Panel */
+      #${HISTORY_ID} {
+        position: fixed; top: 0; right: -340px; width: 320px; height: 100vh;
+        background: #1a1a2e; border-left: 1px solid rgba(255,152,0,0.2);
+        z-index: 99998; overflow-y: auto; transition: right 0.3s ease;
+        font-family: system-ui, sans-serif; font-size: 12px; color: #ccc;
+        box-shadow: -4px 0 16px rgba(0,0,0,0.3);
+      }
+      #${HISTORY_ID}.open { right: 0; }
+      .n8n-hist-header {
+        position: sticky; top: 0; background: #1a1a2e;
+        padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.05);
+        display: flex; align-items: center; justify-content: space-between; z-index: 1;
+      }
+      .n8n-hist-title { font-size: 14px; font-weight: 600; color: #ff9800; }
+      .n8n-hist-close {
+        background: none; border: none; color: #888; font-size: 18px;
+        cursor: pointer; line-height: 1; transition: color 0.15s;
+      }
+      .n8n-hist-close:hover { color: #fff; }
+      .n8n-hist-empty {
+        padding: 40px 16px; text-align: center; color: #666; font-size: 13px;
+      }
+      .n8n-hist-item {
+        padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.03);
+        cursor: pointer; transition: background 0.15s;
+      }
+      .n8n-hist-item:hover { background: rgba(255,152,0,0.06); }
+      .n8n-hist-item.active { background: rgba(255,152,0,0.12); border-left: 3px solid #ff9800; }
+      .n8n-hist-row {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+      }
+      .n8n-hist-status {
+        width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      }
+      .n8n-hist-status-success { background: #4caf50; }
+      .n8n-hist-status-error { background: #ef5350; }
+      .n8n-hist-status-running { background: #ff9800; animation: n8nPreviewPulse 1.5s infinite; }
+      .n8n-hist-name {
+        font-size: 12px; font-weight: 500; color: #ddd;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
+      }
+      .n8n-hist-time { font-size: 10px; color: #888; font-family: monospace; flex-shrink: 0; }
+      .n8n-hist-thumbs {
+        display: flex; gap: 4px; overflow-x: auto; padding: 2px 0;
+        scrollbar-width: none;
+      }
+      .n8n-hist-thumbs::-webkit-scrollbar { display: none; }
+      .n8n-hist-thumb {
+        width: 32px; height: 32px; border-radius: 4px; overflow: hidden;
+        flex-shrink: 0; border: 1px solid rgba(255,255,255,0.08);
+      }
+      .n8n-hist-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .n8n-hist-nodes {
+        font-size: 10px; color: #999; margin-top: 2px;
+      }
+      .n8n-hist-item.selected-compare {
+        border-left: 3px solid #42a5f5; background: rgba(66,165,245,0.08);
+      }
+      .n8n-hist-compare-bar {
+        display: none; padding: 8px 16px; background: #252535;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        text-align: center;
+      }
+      .n8n-hist-compare-bar.visible { display: block; }
+      .n8n-hist-compare-btn {
+        padding: 6px 16px; border-radius: 6px; border: none;
+        background: #42a5f5; color: #fff; font-size: 11px; font-weight: 600;
+        cursor: pointer; transition: background 0.15s;
+      }
+      .n8n-hist-compare-btn:hover { background: #1e88e5; }
+      .n8n-hist-compare-btn:disabled { background: #555; cursor: default; }
+      .n8n-hist-compare-hint {
+        font-size: 10px; color: #888; margin-top: 4px;
+      }
+
+      #${COMPARE_ID} {
+        display: none; position: fixed; inset: 0; z-index: 999998;
+        background: #111; flex-direction: column;
+        font-family: system-ui, sans-serif;
+      }
+      #${COMPARE_ID}.active { display: flex; }
+      .n8n-compare-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 20px; background: #1a1a2e;
+        border-bottom: 1px solid #333;
+      }
+      .n8n-compare-title { color: #ff9800; font-size: 14px; font-weight: 600; }
+      .n8n-compare-close {
+        background: none; border: none; color: #888; font-size: 22px;
+        cursor: pointer; line-height: 1;
+      }
+      .n8n-compare-close:hover { color: #fff; }
+      .n8n-compare-body {
+        display: flex; flex: 1; overflow: hidden;
+      }
+      .n8n-compare-side {
+        flex: 1; overflow-y: auto; padding: 16px;
+        border-right: 1px solid #333;
+      }
+      .n8n-compare-side:last-child { border-right: none; }
+      .n8n-compare-side-title {
+        font-size: 12px; font-weight: 600; color: #ccc;
+        margin-bottom: 12px; padding-bottom: 6px;
+        border-bottom: 1px solid #333;
+      }
+      .n8n-compare-node {
+        margin-bottom: 12px; padding: 8px;
+        background: #1a1a2e; border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+      .n8n-compare-node-name {
+        font-size: 11px; font-weight: 600; color: #ff9800; margin-bottom: 6px;
+      }
+      .n8n-compare-thumbs {
+        display: flex; gap: 4px; flex-wrap: wrap;
+      }
+      .n8n-compare-thumb {
+        width: 48px; height: 48px; border-radius: 4px; overflow: hidden;
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+      .n8n-compare-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
       #${LIGHTBOX_ID} {
         display: none; position: fixed; inset: 0; z-index: 999999;
         background: rgba(0,0,0,0.85);
@@ -454,6 +579,15 @@
       if (panel) panel.classList.toggle('open');
     });
     group.appendChild(settingsBtn);
+
+    // History button
+    const histBtn = document.createElement('button');
+    histBtn.className = 'n8n-preview-fab n8n-preview-fab-secondary';
+    histBtn.title = 'Execution History (Ctrl+Shift+H)';
+    histBtn.textContent = '\uD83D\uDCCB';
+    histBtn.addEventListener('click', toggleHistory);
+    group.appendChild(histBtn);
+
     document.body.appendChild(group);
 
     document.addEventListener('keydown', (e) => {
@@ -1362,12 +1496,410 @@
     }
   }
 
+  // ─── Execution History ──────────────────────────────────
+
+  /** @type {Array<{id: string, status: string, workflowName: string, startedAt: string, stoppedAt: string, nodes: Map}>} */
+  const executionHistory = [];
+  const MAX_HISTORY = 20;
+
+  function injectHistoryPanel() {
+    const panel = document.createElement('div');
+    panel.id = HISTORY_ID;
+
+    // Header
+    const hdr = document.createElement('div');
+    hdr.className = 'n8n-hist-header';
+    const title = document.createElement('span');
+    title.className = 'n8n-hist-title';
+    title.textContent = '\uD83D\uDCCB Execution History';
+    hdr.appendChild(title);
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'n8n-hist-close';
+    closeBtn.textContent = '\u00D7';
+    closeBtn.addEventListener('click', () => panel.classList.remove('open'));
+    hdr.appendChild(closeBtn);
+    panel.appendChild(hdr);
+
+    // Compare bar
+    const compareBar = document.createElement('div');
+    compareBar.className = 'n8n-hist-compare-bar';
+    const compareBtn = document.createElement('button');
+    compareBtn.className = 'n8n-hist-compare-btn';
+    compareBtn.textContent = 'Compare \u25B6';
+    compareBtn.disabled = true;
+    compareBtn.addEventListener('click', openCompareMode);
+    compareBar.appendChild(compareBtn);
+    const compareHint = document.createElement('div');
+    compareHint.className = 'n8n-hist-compare-hint';
+    compareHint.textContent = 'Select 2 executions to compare';
+    compareBar.appendChild(compareHint);
+    panel.appendChild(compareBar);
+
+    // List container
+    const list = document.createElement('div');
+    list.className = 'n8n-hist-list';
+    panel.appendChild(list);
+
+    document.body.appendChild(panel);
+  }
+
+  // ─── Compare Mode ─────────────────────────────────────
+  const compareSelection = new Set();
+
+  function toggleCompareSelect(execId) {
+    if (compareSelection.has(execId)) {
+      compareSelection.delete(execId);
+    } else {
+      if (compareSelection.size >= 2) {
+        // Remove oldest selection
+        const first = compareSelection.values().next().value;
+        compareSelection.delete(first);
+        const oldEl = document.querySelector('.n8n-hist-item[data-exec-id="' + first + '"]');
+        if (oldEl) oldEl.classList.remove('selected-compare');
+      }
+      compareSelection.add(execId);
+    }
+    // Update visual state
+    document.querySelectorAll('.n8n-hist-item').forEach(el => {
+      el.classList.toggle('selected-compare', compareSelection.has(el.getAttribute('data-exec-id')));
+    });
+    // Update compare button
+    const compareBtn = document.querySelector('.n8n-hist-compare-btn');
+    const compareBar = document.querySelector('.n8n-hist-compare-bar');
+    if (compareBtn) compareBtn.disabled = compareSelection.size !== 2;
+    if (compareBar) compareBar.classList.toggle('visible', compareSelection.size > 0);
+  }
+
+  function openCompareMode() {
+    if (compareSelection.size !== 2) return;
+    const ids = [...compareSelection];
+    const execA = executionHistory.find(e => e.id === ids[0]);
+    const execB = executionHistory.find(e => e.id === ids[1]);
+    if (!execA || !execB) return;
+
+    let overlay = document.getElementById(COMPARE_ID);
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = COMPARE_ID;
+      document.body.appendChild(overlay);
+    }
+    while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+
+    // Header
+    const hdr = document.createElement('div');
+    hdr.className = 'n8n-compare-header';
+    const title = document.createElement('span');
+    title.className = 'n8n-compare-title';
+    title.textContent = 'Compare Executions';
+    hdr.appendChild(title);
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'n8n-compare-close';
+    closeBtn.textContent = '\u00D7';
+    closeBtn.addEventListener('click', () => overlay.classList.remove('active'));
+    hdr.appendChild(closeBtn);
+    overlay.appendChild(hdr);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'n8n-compare-body';
+
+    for (const exec of [execA, execB]) {
+      const side = document.createElement('div');
+      side.className = 'n8n-compare-side';
+      const sideTitle = document.createElement('div');
+      sideTitle.className = 'n8n-compare-side-title';
+      const statusIcon = exec.status === 'success' || exec.finished ? '\u2705' :
+                          exec.status === 'error' || exec.status === 'failed' ? '\u274C' : '\u23F3';
+      sideTitle.textContent = statusIcon + ' ' + (exec.workflowName || 'Workflow') + ' \u2022 ' +
+        (exec.stoppedAt ? timeAgo(new Date(exec.stoppedAt).getTime()) : 'running');
+      side.appendChild(sideTitle);
+
+      if (exec.nodes && exec.nodes.size > 0) {
+        for (const [nodeName, bins] of exec.nodes) {
+          const nodeEl = document.createElement('div');
+          nodeEl.className = 'n8n-compare-node';
+          const nameEl = document.createElement('div');
+          nameEl.className = 'n8n-compare-node-name';
+          nameEl.textContent = nodeName + ' (' + bins.length + ' output' + (bins.length > 1 ? 's' : '') + ')';
+          nodeEl.appendChild(nameEl);
+          const thumbs = document.createElement('div');
+          thumbs.className = 'n8n-compare-thumbs';
+          for (const bin of bins.slice(0, 8)) {
+            if (bin.mimeType.startsWith('image/')) {
+              const thumb = document.createElement('div');
+              thumb.className = 'n8n-compare-thumb';
+              const img = document.createElement('img');
+              img.src = binaryUrl(bin.id); img.loading = 'lazy';
+              img.addEventListener('click', () => openLightbox(img.src, bin.mimeType, bin.fileName || 'image'));
+              thumb.appendChild(img);
+              thumbs.appendChild(thumb);
+            } else {
+              const thumb = document.createElement('div');
+              thumb.className = 'n8n-compare-thumb';
+              thumb.style.background = '#1a1a2e';
+              thumb.style.display = 'flex';
+              thumb.style.alignItems = 'center';
+              thumb.style.justifyContent = 'center';
+              thumb.style.fontSize = '8px';
+              thumb.style.color = '#888';
+              thumb.textContent = (bin.mimeType.split('/')[1] || 'file').toUpperCase().slice(0, 4);
+              thumbs.appendChild(thumb);
+            }
+          }
+          nodeEl.appendChild(thumbs);
+          side.appendChild(nodeEl);
+        }
+      } else {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding: 20px; text-align: center; color: #666;';
+        empty.textContent = 'No binary data in this execution';
+        side.appendChild(empty);
+      }
+      body.appendChild(side);
+    }
+    overlay.appendChild(body);
+    overlay.classList.add('active');
+
+    // Close on Escape
+    const escHandler = (e) => {
+      if (e.key === 'Escape' && overlay.classList.contains('active')) {
+        overlay.classList.remove('active');
+        document.removeEventListener('keydown', escHandler);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+  }
+
+  function toggleHistory() {
+    const panel = document.getElementById(HISTORY_ID);
+    if (!panel) return;
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) {
+      refreshHistoryList();
+      fetchRecentExecutions();
+    }
+  }
+
+  function refreshHistoryList() {
+    const panel = document.getElementById(HISTORY_ID);
+    if (!panel) return;
+    const list = panel.querySelector('.n8n-hist-list');
+    if (!list) return;
+
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    if (executionHistory.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'n8n-hist-empty';
+      empty.textContent = 'No executions yet.\nRun a workflow to see history.';
+      list.appendChild(empty);
+      return;
+    }
+
+    for (let i = 0; i < executionHistory.length; i++) {
+      const exec = executionHistory[i];
+      list.appendChild(createHistoryItem(exec));
+    }
+  }
+
+  function createHistoryItem(exec) {
+    const item = document.createElement('div');
+    item.className = 'n8n-hist-item';
+    item.setAttribute('data-exec-id', exec.id);
+
+    // Top row: status + name + time
+    const row = document.createElement('div');
+    row.className = 'n8n-hist-row';
+
+    const status = document.createElement('div');
+    status.className = 'n8n-hist-status';
+    if (exec.status === 'success' || exec.finished === true) {
+      status.classList.add('n8n-hist-status-success');
+    } else if (exec.status === 'error' || exec.status === 'failed') {
+      status.classList.add('n8n-hist-status-error');
+    } else {
+      status.classList.add('n8n-hist-status-running');
+    }
+    row.appendChild(status);
+
+    const name = document.createElement('span');
+    name.className = 'n8n-hist-name';
+    name.textContent = exec.workflowName || exec.workflowData?.name || 'Workflow';
+    row.appendChild(name);
+
+    const time = document.createElement('span');
+    time.className = 'n8n-hist-time';
+    time.textContent = exec.stoppedAt ? timeAgo(new Date(exec.stoppedAt).getTime()) : 'running';
+    row.appendChild(time);
+
+    item.appendChild(row);
+
+    // Thumbnail strip (from cached binary data)
+    if (exec.nodes && exec.nodes.size > 0) {
+      const thumbs = document.createElement('div');
+      thumbs.className = 'n8n-hist-thumbs';
+
+      let thumbCount = 0;
+      for (const [, bins] of exec.nodes) {
+        for (const bin of bins) {
+          if (thumbCount >= 6) break;
+          if (bin.mimeType.startsWith('image/')) {
+            const thumb = document.createElement('div');
+            thumb.className = 'n8n-hist-thumb';
+            const img = document.createElement('img');
+            img.src = binaryUrl(bin.id);
+            img.loading = 'lazy';
+            thumb.appendChild(img);
+            thumbs.appendChild(thumb);
+            thumbCount++;
+          }
+        }
+      }
+
+      if (thumbCount > 0) item.appendChild(thumbs);
+
+      // Node count
+      const nodesLabel = document.createElement('div');
+      nodesLabel.className = 'n8n-hist-nodes';
+      const nodeNames = [...exec.nodes.keys()];
+      nodesLabel.textContent = nodeNames.slice(0, 3).join(', ') + (nodeNames.length > 3 ? ` +${nodeNames.length - 3} more` : '');
+      item.appendChild(nodesLabel);
+    }
+
+    // Compare checkbox
+    const cmpChk = document.createElement('input');
+    cmpChk.type = 'checkbox';
+    cmpChk.style.cssText = 'position: absolute; top: 10px; right: 12px; accent-color: #42a5f5; cursor: pointer;';
+    cmpChk.title = 'Select for compare';
+    cmpChk.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleCompareSelect(exec.id);
+      cmpChk.checked = compareSelection.has(exec.id);
+    });
+    item.style.position = 'relative';
+    item.appendChild(cmpChk);
+
+    // Click to load previews
+    item.addEventListener('click', () => {
+      // Deselect others
+      document.querySelectorAll('.n8n-hist-item.active').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+
+      if (exec.nodes && exec.nodes.size > 0) {
+        // Clear current previews
+        document.querySelectorAll('.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge').forEach(el => el.remove());
+        previewCache.clear();
+
+        // Load this execution's previews
+        const ts = exec.stoppedAt ? new Date(exec.stoppedAt).getTime() : Date.now();
+        for (const [nodeName, bins] of exec.nodes) {
+          previewCache.set(nodeName, { items: bins, timestamp: ts });
+          renderPreviewsOnNode(nodeName, bins, ts);
+        }
+      } else {
+        // Fetch full execution data
+        fetchAndLoadExecution(exec.id);
+      }
+    });
+
+    return item;
+  }
+
+  async function fetchAndLoadExecution(execId) {
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const apiKey = localStorage.getItem('n8n-preview-apikey');
+      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
+      const resp = await originalFetch(`/rest/executions/${encodeURIComponent(execId)}?includeData=true`, {
+        credentials: 'include', headers,
+      });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      const data = body.data || body;
+      processExecution(data);
+    } catch (err) {
+      console.warn('[N8N Preview] History load error:', err.message);
+    }
+  }
+
+  async function fetchRecentExecutions() {
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const apiKey = localStorage.getItem('n8n-preview-apikey');
+      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
+      const resp = await originalFetch('/rest/executions?limit=20&includeData=true', {
+        credentials: 'include', headers,
+      });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      const execs = body.data || [];
+
+      // Merge into history
+      for (const exec of execs) {
+        if (!exec.id) continue;
+        const exists = executionHistory.find(e => e.id === exec.id);
+        if (exists) continue;
+
+        const nodeMap = extractBinaryFromExecution(exec);
+        executionHistory.unshift({
+          id: exec.id,
+          status: exec.status || (exec.finished ? 'success' : 'unknown'),
+          workflowName: exec.workflowData?.name || '',
+          startedAt: exec.startedAt || '',
+          stoppedAt: exec.stoppedAt || '',
+          nodes: nodeMap,
+        });
+      }
+
+      // Trim
+      while (executionHistory.length > MAX_HISTORY) executionHistory.pop();
+
+      refreshHistoryList();
+    } catch (err) {
+      console.warn('[N8N Preview] History fetch error:', err.message);
+    }
+  }
+
+  // Also record executions as they're processed
+  const origProcessExecution = processExecution;
+  processExecution = function (executionData) {
+    origProcessExecution(executionData);
+
+    const nodeMap = extractBinaryFromExecution(executionData);
+    const id = executionData.id || ('t' + Date.now());
+    const exists = executionHistory.find(e => e.id === id);
+    if (!exists && nodeMap.size > 0) {
+      executionHistory.unshift({
+        id: id,
+        status: executionData.status || (executionData.finished ? 'success' : 'unknown'),
+        workflowName: executionData.workflowData?.name || '',
+        startedAt: executionData.startedAt || '',
+        stoppedAt: executionData.stoppedAt || '',
+        nodes: nodeMap,
+      });
+      while (executionHistory.length > MAX_HISTORY) executionHistory.pop();
+
+      // Refresh if panel is open
+      const panel = document.getElementById(HISTORY_ID);
+      if (panel?.classList.contains('open')) refreshHistoryList();
+    }
+  };
+
+  // Keyboard: Ctrl+Shift+H
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key === 'H') {
+      e.preventDefault();
+      toggleHistory();
+    }
+  });
+
   // ─── Init ───────────────────────────────────────────────
   injectStyles();
   injectBadge();
   injectFabGroup();
   injectSettingsPanel();
   injectLightbox();
+  injectHistoryPanel();
   watchCanvasChanges();
   // Start WS, fall back to polling
   setTimeout(() => {
