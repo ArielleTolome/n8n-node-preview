@@ -1,15 +1,18 @@
 /**
- * N8N Node Preview Injector v2.0.0
+ * N8N Node Preview Injector v2.0.2
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
  * @license MIT
  * @author Ariel Tolome
  */
+// Guard: prevent double-execution (Nginx may inject into multiple responses)
+if (window.__n8nPreviewLoaded) { /* already running, skip */ }
+else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.1';
+  const VERSION = '2.0.2';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -2186,4 +2189,4 @@
     pollTimer = setInterval(pollExecutions, POLL_INTERVAL);
   }, 2000);
 
-})();
+})(); } // end double-load guard
