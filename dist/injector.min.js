@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '2.0.0';
+  const VERSION = '2.0.1';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -771,15 +771,26 @@
 
   // ─── Helpers ────────────────────────────────────────────
   function findCanvasNode(nodeName) {
+    // N8N 2.x: data-node-name attribute is set directly on the .vue-flow__node element
+    const byAttr = document.querySelector(`.vue-flow__node[data-node-name="${CSS.escape(nodeName)}"]`);
+    if (byAttr) return byAttr;
+
+    // Fallback 1: data-id attribute + child text match (older N8N versions)
     for (const node of document.querySelectorAll('.vue-flow__node[data-id]')) {
       for (const sel of [
         '[data-test-id="canvas-node-name"]', '.node-name', '.node-label',
         '[class*="NodeName"]', '[class*="node-name"]', '[class*="nodeName"]',
+        '[class*="node-title"]', '[class*="nodeTitle"]',
       ]) {
         const el = node.querySelector(sel);
         if (el && el.textContent.trim() === nodeName) return node;
       }
     }
+
+    // Fallback 2: any element with data-node-name (no .vue-flow__node wrapper)
+    const anyAttr = document.querySelector(`[data-node-name="${CSS.escape(nodeName)}"]`);
+    if (anyAttr) return anyAttr;
+
     return null;
   }
 
@@ -1349,7 +1360,12 @@
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
       if (url.includes('/rest/executions/') || (url.includes('/rest/workflows/') && url.includes('/run'))) {
         response.clone().json().then(data => {
-          if (data?.data?.resultData?.runData) processExecution(data);
+          // N8N wraps execution result in data.data for workflow runs
+          const exec = data?.data ?? data;
+          if (exec?.data?.resultData?.runData) {
+            console.log('[N8N Preview] Intercepted execution from fetch:', url);
+            processExecution(exec);
+          }
         }).catch(() => {});
       }
     } catch { /* never break fetch */ }
