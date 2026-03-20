@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.4';
+  const VERSION = '2.0.5';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -1361,10 +1361,11 @@ else { window.__n8nPreviewLoaded = true;
     const response = await originalFetch.apply(this, args);
     try {
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-      if (url.includes('/rest/executions/') || url.includes('/api/v1/executions/') || (url.includes('/rest/workflows/') && url.includes('/run'))) {
+      // Only intercept /api/v1/ and workflow run calls — NOT /rest/ (causes browserId check failures)
+      if (url.includes('/api/v1/executions/') || (url.includes('/rest/workflows/') && url.includes('/run'))) {
         response.clone().json().then(data => {
-          // N8N wraps execution result in data.data for workflow runs
           // Public API (/api/v1/) wraps in { data: exec }
+          // Workflow run result wraps in data.data
           const exec = data?.data ?? data;
           if (exec?.data?.resultData?.runData) {
             console.log('[N8N Preview] Intercepted execution from fetch:', url);
@@ -2055,39 +2056,7 @@ else { window.__n8nPreviewLoaded = true;
     }
   };
 
-  // ─── API Key Fallback ─────────────────────────────────
-  let apiKeyPrompted = false;
-  const origPollExecutions = pollExecutions;
-  pollExecutions = async function () {
-    if (!previewsEnabled) return;
-    try {
-      const headers = { 'Accept': 'application/json' };
-      const apiKey = localStorage.getItem('n8n-preview-apikey');
-      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
-      const resp = await originalFetch('/api/v1/executions?limit=5&includeData=true', {
-        credentials: 'include', headers,
-      });
-      if (resp.status === 401 && !apiKeyPrompted) {
-        apiKeyPrompted = true;
-        const key = prompt('[N8N Preview] API authentication required.\nEnter your N8N API key:');
-        if (key) {
-          localStorage.setItem('n8n-preview-apikey', key);
-          console.log('[N8N Preview] API key saved');
-          return pollExecutions();
-        }
-        return;
-      }
-      if (!resp.ok) return;
-      const body = await resp.json();
-      for (const exec of (body?.data || [])) {
-        if (!exec.id || exec.id === lastExecutionId) continue;
-        if (exec.status !== 'success' && exec.finished !== true) continue;
-        lastExecutionId = exec.id;
-        processExecution(exec);
-        break;
-      }
-    } catch (err) { console.warn('[N8N Preview] Poll error:', err.message); }
-  };
+  // ─── API Key Fallback — removed (handled by apiRequest() + nginx pre-injection) ───
 
   // ─── Multi-Workflow URL Change Detection ──────────────
   let lastWorkflowUrl = window.location.pathname;
