@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v0.2.0
+ * N8N Node Preview Injector v0.3.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.3.0';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
@@ -17,8 +17,8 @@
   const LIGHTBOX_ID = 'n8n-preview-lightbox';
   const POLL_INTERVAL = 4000;
   const MAX_ITEMS_VISIBLE = 4;
+  const VIDEO_INLINE_MAX_BYTES = 5 * 1024 * 1024;
 
-  /** @returns {boolean} True if injector already initialized */
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
   if (isAlreadyLoaded()) return;
 
@@ -27,10 +27,8 @@
   // ─── State ──────────────────────────────────────────────
   let lastExecutionId = null;
   let previewsEnabled = loadSettings().enabled !== false;
-  /** @type {Map<string, {items: Array, timestamp: number}>} nodeName -> preview data */
   const previewCache = new Map();
 
-  /** @returns {{enabled: boolean}} */
   function loadSettings() {
     try {
       return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { enabled: true };
@@ -39,12 +37,11 @@
     }
   }
 
-  /** @param {object} settings */
   function saveSettings(settings) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }
 
-  // ─── CSS Injection ──────────────────────────────────────
+  // ─── CSS ────────────────────────────────────────────────
   const injectStyles = () => {
     const style = document.createElement('style');
     style.id = STYLE_ID;
@@ -78,7 +75,6 @@
         to { opacity: 1; transform: translateY(0); }
       }
 
-      /* Toggle button */
       #${TOGGLE_ID} {
         position: fixed;
         bottom: 20px;
@@ -100,12 +96,8 @@
         line-height: 1;
       }
       #${TOGGLE_ID}:hover { transform: scale(1.1); }
-      #${TOGGLE_ID}.disabled {
-        background: #666;
-        opacity: 0.7;
-      }
+      #${TOGGLE_ID}.disabled { background: #666; opacity: 0.7; }
 
-      /* Preview container on nodes */
       .n8n-preview-container {
         display: flex;
         flex-wrap: nowrap;
@@ -120,16 +112,12 @@
         animation: n8nPreviewSlideIn 0.3s ease-out;
       }
       .n8n-preview-container::-webkit-scrollbar { height: 4px; }
-      .n8n-preview-container::-webkit-scrollbar-thumb {
-        background: rgba(255,152,0,0.4);
-        border-radius: 2px;
-      }
+      .n8n-preview-container::-webkit-scrollbar-thumb { background: rgba(255,152,0,0.4); border-radius: 2px; }
       @keyframes n8nPreviewSlideIn {
         from { opacity: 0; max-height: 0; }
         to { opacity: 1; max-height: 200px; }
       }
 
-      /* Individual preview item */
       .n8n-preview-item {
         position: relative;
         flex-shrink: 0;
@@ -146,95 +134,68 @@
         transform: scale(1.08);
         box-shadow: 0 2px 8px rgba(255,152,0,0.3);
       }
-      .n8n-preview-item img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
+      .n8n-preview-item img, .n8n-preview-item video {
+        width: 100%; height: 100%; object-fit: cover; display: block;
       }
 
-      /* Overlay label on preview item */
       .n8n-preview-overlay {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
+        position: absolute; bottom: 0; left: 0; right: 0;
         padding: 2px 4px;
         background: linear-gradient(transparent, rgba(0,0,0,0.7));
-        color: #fff;
-        font-size: 8px;
-        text-align: center;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        color: #fff; font-size: 8px; text-align: center;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         line-height: 1.2;
       }
 
-      /* "+N more" badge */
       .n8n-preview-more {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        width: 64px;
-        height: 64px;
-        border-radius: 6px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0; width: 64px; height: 64px; border-radius: 6px;
         background: rgba(255,152,0,0.15);
         border: 1px dashed rgba(255,152,0,0.4);
-        color: #ff9800;
-        font-size: 11px;
-        font-weight: 600;
-        cursor: pointer;
+        color: #ff9800; font-size: 11px; font-weight: 600; cursor: pointer;
       }
-      .n8n-preview-more:hover {
-        background: rgba(255,152,0,0.25);
+      .n8n-preview-more:hover { background: rgba(255,152,0,0.25); }
+
+      .n8n-preview-video-play {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.4); color: #fff; font-size: 22px;
+        pointer-events: none; transition: background 0.15s;
+      }
+      .n8n-preview-item:hover .n8n-preview-video-play { background: rgba(0,0,0,0.2); }
+
+      .n8n-preview-meta {
+        position: absolute; top: 2px; left: 2px;
+        padding: 1px 4px; background: rgba(0,0,0,0.6);
+        color: #ff9800; font-size: 7px; font-weight: 600;
+        border-radius: 3px; text-transform: uppercase; line-height: 1.3;
       }
 
-      /* Lightbox */
       #${LIGHTBOX_ID} {
-        display: none;
-        position: fixed;
-        inset: 0;
-        z-index: 999999;
+        display: none; position: fixed; inset: 0; z-index: 999999;
         background: rgba(0,0,0,0.85);
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-        gap: 12px;
+        align-items: center; justify-content: center;
+        flex-direction: column; gap: 12px;
         animation: n8nPreviewFadeIn 0.2s ease-out;
       }
       #${LIGHTBOX_ID}.active { display: flex; }
-      #${LIGHTBOX_ID} img {
-        max-width: 90vw;
-        max-height: 80vh;
-        border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      #${LIGHTBOX_ID} img, #${LIGHTBOX_ID} video {
+        max-width: 90vw; max-height: 80vh;
+        border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
       }
-      .n8n-lightbox-info {
-        color: #ccc;
-        font-size: 13px;
-        font-family: monospace;
-        text-align: center;
-      }
+      .n8n-lightbox-info { color: #ccc; font-size: 13px; font-family: monospace; text-align: center; }
       .n8n-lightbox-close {
-        position: absolute;
-        top: 16px;
-        right: 20px;
-        color: #fff;
-        font-size: 28px;
-        cursor: pointer;
-        opacity: 0.7;
-        transition: opacity 0.2s;
-        background: none;
-        border: none;
-        line-height: 1;
+        position: absolute; top: 16px; right: 20px;
+        color: #fff; font-size: 28px; cursor: pointer;
+        opacity: 0.7; transition: opacity 0.2s;
+        background: none; border: none; line-height: 1;
       }
       .n8n-lightbox-close:hover { opacity: 1; }
     `;
     document.head.appendChild(style);
   };
 
-  // ─── Toolbar Badge ──────────────────────────────────────
+  // ─── Badge ──────────────────────────────────────────────
   const injectBadge = () => {
     const tryInsert = () => {
       if (document.getElementById(BADGE_ID)) return true;
@@ -242,8 +203,7 @@
         'header .actions',
         '[class*="header"] [class*="actions"]',
         '[class*="header"] [class*="right"]',
-        '.el-header',
-        'header',
+        '.el-header', 'header',
         '[data-test-id="main-sidebar-toggle"]',
       ];
       for (const sel of selectors) {
@@ -264,29 +224,24 @@
       }
       return false;
     };
-
     if (tryInsert()) return;
-
-    const observer = new MutationObserver((_mutations, obs) => {
-      if (tryInsert()) obs.disconnect();
-    });
+    const observer = new MutationObserver((_m, obs) => { if (tryInsert()) obs.disconnect(); });
     observer.observe(document.body, { childList: true, subtree: true });
-
     setTimeout(() => {
       observer.disconnect();
       if (!document.getElementById(BADGE_ID)) {
-        const fallback = document.createElement('div');
-        fallback.id = BADGE_ID;
-        fallback.className = 'n8n-preview-fade-in';
-        fallback.textContent = '\u2728 Preview Active';
-        fallback.title = `N8N Node Preview v${VERSION}`;
-        Object.assign(fallback.style, { position: 'fixed', top: '10px', right: '10px', zIndex: '99999' });
-        document.body.appendChild(fallback);
+        const fb = document.createElement('div');
+        fb.id = BADGE_ID;
+        fb.className = 'n8n-preview-fade-in';
+        fb.textContent = '\u2728 Preview Active';
+        fb.title = `N8N Node Preview v${VERSION}`;
+        Object.assign(fb.style, { position: 'fixed', top: '10px', right: '10px', zIndex: '99999' });
+        document.body.appendChild(fb);
       }
     }, 10000);
   };
 
-  // ─── Toggle Button ──────────────────────────────────────
+  // ─── Toggle ─────────────────────────────────────────────
   const injectToggle = () => {
     const btn = document.createElement('button');
     btn.id = TOGGLE_ID;
@@ -298,75 +253,50 @@
       btn.textContent = previewsEnabled ? '\uD83D\uDC41' : '\uD83D\uDEAB';
       btn.className = previewsEnabled ? '' : 'disabled';
       saveSettings({ ...loadSettings(), enabled: previewsEnabled });
-      toggleAllPreviews(previewsEnabled);
+      document.querySelectorAll('.n8n-preview-container').forEach(el => {
+        el.style.display = previewsEnabled ? 'flex' : 'none';
+      });
     });
     document.body.appendChild(btn);
-
-    // Ctrl+Shift+P keyboard shortcut
     document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.shiftKey && e.key === 'P') {
-        e.preventDefault();
-        btn.click();
-      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); btn.click(); }
     });
   };
-
-  /** @param {boolean} show */
-  function toggleAllPreviews(show) {
-    document.querySelectorAll('.n8n-preview-container').forEach(el => {
-      el.style.display = show ? 'flex' : 'none';
-    });
-  }
 
   // ─── Lightbox ───────────────────────────────────────────
   const closeLightbox = () => {
     const lb = document.getElementById(LIGHTBOX_ID);
     if (!lb) return;
     lb.classList.remove('active');
-    const contentEl = lb.querySelector('.n8n-lightbox-content');
-    while (contentEl.firstChild) contentEl.removeChild(contentEl.firstChild);
+    const c = lb.querySelector('.n8n-lightbox-content');
+    while (c.firstChild) c.removeChild(c.firstChild);
   };
 
   const injectLightbox = () => {
     const lb = document.createElement('div');
     lb.id = LIGHTBOX_ID;
-
     const closeBtn = document.createElement('button');
     closeBtn.className = 'n8n-lightbox-close';
     closeBtn.textContent = '\u00D7';
     lb.appendChild(closeBtn);
-
     const content = document.createElement('div');
     content.className = 'n8n-lightbox-content';
     lb.appendChild(content);
-
     const info = document.createElement('div');
     info.className = 'n8n-lightbox-info';
     lb.appendChild(info);
-
     lb.addEventListener('click', (e) => {
       if (e.target === lb || e.target === closeBtn) closeLightbox();
     });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeLightbox();
-    });
-
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
     document.body.appendChild(lb);
   };
 
-  /**
-   * Opens lightbox with an image.
-   * @param {string} src - Binary data URL
-   * @param {string} mimeType - MIME type
-   * @param {string} fileName - File name to display
-   */
   function openLightbox(src, mimeType, fileName) {
     const lb = document.getElementById(LIGHTBOX_ID);
     if (!lb) return;
     const content = lb.querySelector('.n8n-lightbox-content');
     const info = lb.querySelector('.n8n-lightbox-info');
-
     while (content.firstChild) content.removeChild(content.firstChild);
 
     if (mimeType.startsWith('image/')) {
@@ -374,6 +304,13 @@
       img.src = src;
       img.alt = fileName;
       content.appendChild(img);
+    } else if (mimeType.startsWith('video/')) {
+      const video = document.createElement('video');
+      video.src = src;
+      video.controls = true;
+      video.autoplay = true;
+      video.loop = true;
+      content.appendChild(video);
     }
 
     const ext = mimeType.split('/')[1] || '';
@@ -381,100 +318,125 @@
     lb.classList.add('active');
   }
 
-  // ─── DOM Node Finders ───────────────────────────────────
-
-  /**
-   * Finds a canvas node element by its workflow node name.
-   * @param {string} nodeName
-   * @returns {Element|null}
-   */
+  // ─── DOM Helpers ────────────────────────────────────────
   function findCanvasNode(nodeName) {
     const allNodes = document.querySelectorAll('.vue-flow__node[data-id]');
     for (const node of allNodes) {
-      const nameSelectors = [
-        '[data-test-id="canvas-node-name"]',
-        '.node-name',
-        '.node-label',
-        '[class*="NodeName"]',
-        '[class*="node-name"]',
-        '[class*="nodeName"]',
+      const sels = [
+        '[data-test-id="canvas-node-name"]', '.node-name', '.node-label',
+        '[class*="NodeName"]', '[class*="node-name"]', '[class*="nodeName"]',
       ];
-      for (const sel of nameSelectors) {
-        const nameEl = node.querySelector(sel);
-        if (nameEl && nameEl.textContent.trim() === nodeName) {
-          return node;
-        }
+      for (const sel of sels) {
+        const el = node.querySelector(sel);
+        if (el && el.textContent.trim() === nodeName) return node;
       }
     }
     return null;
   }
 
-  // ─── Preview Rendering ──────────────────────────────────
-
-  /**
-   * Builds the binary data URL for a given item.
-   * @param {string} id
-   * @returns {string}
-   */
   function binaryUrl(id) {
     return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`;
   }
 
-  /**
-   * Creates a preview element for an image item.
-   * @param {{id: string, mimeType: string, fileName: string}} item
-   * @returns {HTMLElement}
-   */
+  function formatSize(bytes) {
+    if (!bytes || bytes <= 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  // ─── Preview Creation ───────────────────────────────────
   function createImagePreview(item) {
     const wrapper = document.createElement('div');
     wrapper.className = 'n8n-preview-item';
-
     const img = document.createElement('img');
     img.src = binaryUrl(item.id);
     img.alt = item.fileName || 'preview';
     img.loading = 'lazy';
-
     const overlay = document.createElement('div');
     overlay.className = 'n8n-preview-overlay';
-    const ext = item.mimeType.split('/')[1] || '';
-    overlay.textContent = item.fileName || ext.toUpperCase();
-
+    overlay.textContent = item.fileName || (item.mimeType.split('/')[1] || '').toUpperCase();
     wrapper.appendChild(img);
     wrapper.appendChild(overlay);
-
     wrapper.addEventListener('click', (e) => {
       e.stopPropagation();
       openLightbox(img.src, item.mimeType, item.fileName || 'image');
     });
-
     return wrapper;
   }
 
   /**
-   * Renders preview thumbnails onto a canvas node.
-   * @param {string} nodeName - Workflow node name
-   * @param {Array<{id: string, mimeType: string, fileName: string}>} binaryItems
+   * Creates a video preview element.
+   * Small videos (<5MB): inline muted video with hover-to-play.
+   * Large videos: placeholder with play button overlay.
    */
+  function createVideoPreview(item) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'n8n-preview-item';
+    const src = binaryUrl(item.id);
+    const isSmall = !item.fileSize || item.fileSize < VIDEO_INLINE_MAX_BYTES;
+
+    if (isSmall) {
+      const video = document.createElement('video');
+      video.src = src;
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      wrapper.addEventListener('mouseenter', () => video.play().catch(() => {}));
+      wrapper.addEventListener('mouseleave', () => { video.pause(); video.currentTime = 0; });
+      wrapper.appendChild(video);
+    } else {
+      wrapper.style.background = '#0d0d1a';
+      const playOverlay = document.createElement('div');
+      playOverlay.className = 'n8n-preview-video-play';
+      playOverlay.textContent = '\u25B6';
+      wrapper.appendChild(playOverlay);
+    }
+
+    const ext = item.mimeType.split('/')[1] || 'video';
+    const meta = document.createElement('div');
+    meta.className = 'n8n-preview-meta';
+    const sizeStr = item.fileSize ? formatSize(item.fileSize) : '';
+    meta.textContent = sizeStr ? `${ext} \u2022 ${sizeStr}` : ext;
+    wrapper.appendChild(meta);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'n8n-preview-overlay';
+    overlay.textContent = item.fileName || ext.toUpperCase();
+    wrapper.appendChild(overlay);
+
+    wrapper.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLightbox(src, item.mimeType, item.fileName || 'video');
+    });
+    return wrapper;
+  }
+
+  // ─── Rendering ──────────────────────────────────────────
   function renderPreviewsOnNode(nodeName, binaryItems) {
     if (!previewsEnabled) return;
-
     const node = findCanvasNode(nodeName);
     if (!node) return;
 
     const existing = node.querySelector('.n8n-preview-container');
     if (existing) existing.remove();
 
-    const imageItems = binaryItems.filter(b => b.mimeType.startsWith('image/'));
-    if (imageItems.length === 0) return;
+    const mediaItems = binaryItems.filter(b =>
+      b.mimeType.startsWith('image/') || b.mimeType.startsWith('video/')
+    );
+    if (mediaItems.length === 0) return;
 
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
 
-    const visibleItems = imageItems.slice(0, MAX_ITEMS_VISIBLE);
-    const remaining = imageItems.length - MAX_ITEMS_VISIBLE;
+    const visible = mediaItems.slice(0, MAX_ITEMS_VISIBLE);
+    const remaining = mediaItems.length - MAX_ITEMS_VISIBLE;
 
-    for (const item of visibleItems) {
-      container.appendChild(createImagePreview(item));
+    for (const item of visible) {
+      container.appendChild(
+        item.mimeType.startsWith('video/') ? createVideoPreview(item) : createImagePreview(item)
+      );
     }
 
     if (remaining > 0) {
@@ -483,10 +445,8 @@
       more.textContent = `+${remaining} more`;
       more.addEventListener('click', (e) => {
         e.stopPropagation();
-        const next = imageItems[MAX_ITEMS_VISIBLE];
-        if (next) {
-          openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'image');
-        }
+        const next = mediaItems[MAX_ITEMS_VISIBLE];
+        if (next) openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'media');
       });
       container.appendChild(more);
     }
@@ -494,118 +454,83 @@
     node.appendChild(container);
   }
 
-  // ─── Execution Data Extraction ──────────────────────────
-
-  /**
-   * Extracts binary items from execution run data.
-   * @param {object} executionData
-   * @returns {Map<string, Array<{id: string, mimeType: string, fileName: string}>>}
-   */
+  // ─── Execution Extraction ───────────────────────────────
   function extractBinaryFromExecution(executionData) {
     const nodeMap = new Map();
-
     try {
       const runData = executionData?.data?.resultData?.runData;
       if (!runData) return nodeMap;
 
       for (const [nodeName, runs] of Object.entries(runData)) {
         const binaries = [];
-
         for (const run of runs) {
           const items = run?.data?.main;
           if (!items) continue;
-
           for (const outputGroup of items) {
             if (!Array.isArray(outputGroup)) continue;
             for (const item of outputGroup) {
               if (!item.binary) continue;
-              for (const [_key, binaryData] of Object.entries(item.binary)) {
-                if (binaryData.id && binaryData.mimeType) {
+              for (const [_key, bd] of Object.entries(item.binary)) {
+                if (bd.id && bd.mimeType) {
                   binaries.push({
-                    id: binaryData.id,
-                    mimeType: binaryData.mimeType,
-                    fileName: binaryData.fileName || '',
+                    id: bd.id,
+                    mimeType: bd.mimeType,
+                    fileName: bd.fileName || '',
+                    fileSize: bd.fileSize || 0,
                   });
                 }
               }
             }
           }
         }
-
-        if (binaries.length > 0) {
-          nodeMap.set(nodeName, binaries);
-        }
+        if (binaries.length > 0) nodeMap.set(nodeName, binaries);
       }
     } catch (err) {
       console.warn('[N8N Preview] Error extracting binary data:', err);
     }
-
     return nodeMap;
   }
 
-  /**
-   * Processes execution data and renders previews.
-   * @param {object} executionData
-   */
   function processExecution(executionData) {
     const nodeMap = extractBinaryFromExecution(executionData);
     if (nodeMap.size === 0) return;
-
     for (const [nodeName, binaries] of nodeMap) {
       previewCache.set(nodeName, { items: binaries, timestamp: Date.now() });
       renderPreviewsOnNode(nodeName, binaries);
     }
-
     console.log(`[N8N Preview] Rendered previews for ${nodeMap.size} node(s)`);
   }
 
   // ─── Fetch Interceptor ──────────────────────────────────
-
   const originalFetch = window.fetch;
-
   window.fetch = async function (...args) {
     const response = await originalFetch.apply(this, args);
-
     try {
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-      const isExecution = url.includes('/rest/executions/');
-      const isRun = url.includes('/rest/workflows/') && url.includes('/run');
-
-      if (isExecution || isRun) {
+      if (url.includes('/rest/executions/') || (url.includes('/rest/workflows/') && url.includes('/run'))) {
         const clone = response.clone();
         clone.json().then(data => {
-          if (data?.data?.resultData?.runData) {
-            processExecution(data);
-          }
+          if (data?.data?.resultData?.runData) processExecution(data);
         }).catch(() => {});
       }
-    } catch {
-      // Never break the original fetch
-    }
-
+    } catch { /* never break fetch */ }
     return response;
   };
 
-  // ─── Execution Polling ──────────────────────────────────
-
+  // ─── Polling ────────────────────────────────────────────
   async function pollExecutions() {
     if (!previewsEnabled) return;
-
     try {
       const resp = await originalFetch('/rest/executions?limit=5&includeData=true', {
         credentials: 'include',
         headers: { 'Accept': 'application/json' },
       });
-
       if (!resp.ok) return;
-
       const body = await resp.json();
       const executions = body?.data || [];
-
       for (const exec of executions) {
         if (!exec.id || exec.id === lastExecutionId) continue;
         if (exec.status !== 'success' && exec.finished !== true) continue;
-
         lastExecutionId = exec.id;
         processExecution(exec);
         break;
@@ -615,12 +540,10 @@
     }
   }
 
-  // ─── Re-render on DOM changes ───────────────────────────
-
+  // ─── Canvas Watcher ─────────────────────────────────────
   function watchCanvasChanges() {
     const observer = new MutationObserver(() => {
       if (!previewsEnabled) return;
-
       for (const [nodeName, data] of previewCache) {
         const node = findCanvasNode(nodeName);
         if (node && !node.querySelector('.n8n-preview-container')) {
@@ -628,36 +551,24 @@
         }
       }
     });
-
     const startObserving = () => {
       const canvas = document.querySelector('.vue-flow');
-      if (canvas) {
-        observer.observe(canvas, { childList: true, subtree: true });
-        return true;
-      }
+      if (canvas) { observer.observe(canvas, { childList: true, subtree: true }); return true; }
       return false;
     };
-
     if (!startObserving()) {
-      const waitObserver = new MutationObserver((_m, obs) => {
-        if (startObserving()) obs.disconnect();
-      });
-      waitObserver.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => waitObserver.disconnect(), 30000);
+      const wo = new MutationObserver((_m, obs) => { if (startObserving()) obs.disconnect(); });
+      wo.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => wo.disconnect(), 30000);
     }
   }
 
   // ─── Init ───────────────────────────────────────────────
-
   injectStyles();
   injectBadge();
   injectToggle();
   injectLightbox();
   watchCanvasChanges();
-
-  setTimeout(() => {
-    pollExecutions();
-    setInterval(pollExecutions, POLL_INTERVAL);
-  }, 2000);
+  setTimeout(() => { pollExecutions(); setInterval(pollExecutions, POLL_INTERVAL); }, 2000);
 
 })();
