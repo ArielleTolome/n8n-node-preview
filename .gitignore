@@ -12,3 +12,4 @@ Thumbs.db
 .vscode/
 *.sublime-project
 *.sublime-workspace
+.github/workflows/release.yml
