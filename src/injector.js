@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v0.4.0
+ * N8N Node Preview Injector v0.5.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,15 +9,17 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
   const TOGGLE_ID = 'n8n-preview-toggle';
+  const SETTINGS_ID = 'n8n-preview-settings-panel';
   const LIGHTBOX_ID = 'n8n-preview-lightbox';
   const POLL_INTERVAL = 4000;
   const MAX_ITEMS_VISIBLE = 4;
   const VIDEO_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5MB — embed inline below this
+  const SIZE_MAP = { sm: 48, md: 64, lg: 96 };
 
   /** @returns {boolean} True if injector already initialized */
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
@@ -26,23 +28,30 @@
 
   console.log(`%c[N8N Preview] Injector v${VERSION} loaded`, 'color: #ff9800; font-weight: bold;');
 
+  // ─── Default Settings ────────────────────────────────────
+  const DEFAULT_SETTINGS = { enabled: true, size: 'md', autoShow: true, videoEnabled: true };
+
   // ─── State ──────────────────────────────────────────────
   let lastExecutionId = null;
-  let previewsEnabled = loadSettings().enabled !== false;
+  let settings = loadSettings();
+  let previewsEnabled = settings.enabled !== false;
   /** @type {Map<string, {items: Array, timestamp: number}>} nodeName → preview data */
   const previewCache = new Map();
+  /** @type {Set<string>} node names with collapsed previews */
+  const collapsedNodes = new Set();
 
-  /** @returns {{enabled: boolean}} */
+  /** @returns {object} */
   function loadSettings() {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { enabled: true };
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) };
     } catch {
-      return { enabled: true };
+      return { ...DEFAULT_SETTINGS };
     }
   }
 
-  /** @param {object} settings */
-  function saveSettings(settings) {
+  /** @param {object} s */
+  function saveSettings(s) {
+    settings = { ...settings, ...s };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }
 
@@ -312,6 +321,125 @@
         pointer-events: none;
         line-height: 1;
       }
+
+      /* Per-node header controls */
+      .n8n-preview-node-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .n8n-preview-ctrl-btn {
+        background: none;
+        border: none;
+        color: #999;
+        font-size: 12px;
+        cursor: pointer;
+        padding: 0 2px;
+        line-height: 1;
+        transition: color 0.15s;
+      }
+      .n8n-preview-ctrl-btn:hover { color: #ff9800; }
+
+      /* Pulsing ring on running nodes */
+      .n8n-preview-running {
+        box-shadow: 0 0 0 0 rgba(255,152,0,0.6);
+        animation: n8nPulse 1.5s ease-out infinite;
+      }
+      @keyframes n8nPulse {
+        0% { box-shadow: 0 0 0 0 rgba(255,152,0,0.6); }
+        70% { box-shadow: 0 0 0 8px rgba(255,152,0,0); }
+        100% { box-shadow: 0 0 0 0 rgba(255,152,0,0); }
+      }
+
+      /* Slide-in/out for preview container */
+      .n8n-preview-slide-out {
+        animation: n8nPreviewSlideOut 0.2s ease-in forwards;
+      }
+      @keyframes n8nPreviewSlideOut {
+        from { opacity: 1; max-height: 200px; }
+        to { opacity: 0; max-height: 0; overflow: hidden; }
+      }
+
+      /* Settings panel */
+      #${SETTINGS_ID} {
+        display: none;
+        position: fixed;
+        bottom: 72px;
+        right: 20px;
+        width: 220px;
+        background: #1e1e2e;
+        border: 1px solid rgba(255,152,0,0.3);
+        border-radius: 12px;
+        padding: 14px;
+        z-index: 99999;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: #ccc;
+        font-size: 12px;
+      }
+      #${SETTINGS_ID}.active { display: block; }
+      .n8n-settings-title {
+        font-weight: 700;
+        font-size: 13px;
+        color: #ff9800;
+        margin-bottom: 10px;
+      }
+      .n8n-settings-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      .n8n-settings-row label {
+        font-size: 11px;
+        color: #aaa;
+      }
+      .n8n-settings-select {
+        background: #2a2a3e;
+        color: #fff;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .n8n-settings-toggle {
+        width: 32px;
+        height: 18px;
+        border-radius: 9px;
+        background: #444;
+        border: none;
+        cursor: pointer;
+        position: relative;
+        transition: background 0.2s;
+      }
+      .n8n-settings-toggle.on { background: #ff9800; }
+      .n8n-settings-toggle::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform 0.2s;
+      }
+      .n8n-settings-toggle.on::after { transform: translateX(14px); }
+      .n8n-settings-btn {
+        width: 100%;
+        padding: 6px;
+        margin-top: 6px;
+        background: rgba(255,152,0,0.15);
+        border: 1px solid rgba(255,152,0,0.3);
+        border-radius: 6px;
+        color: #ff9800;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .n8n-settings-btn:hover { background: rgba(255,152,0,0.25); }
     `;
     document.head.appendChild(style);
   };
@@ -368,29 +496,60 @@
     }, 10000);
   };
 
-  // ─── Toggle Button ──────────────────────────────────────
+  // ─── Toggle Button + Settings Gear ──────────────────────
   const injectToggle = () => {
     const btn = document.createElement('button');
     btn.id = TOGGLE_ID;
-    btn.title = 'Toggle N8N Previews';
+    btn.title = 'Toggle N8N Previews (Ctrl+Shift+P)';
     btn.textContent = previewsEnabled ? '\uD83D\uDC41' : '\uD83D\uDEAB';
     btn.className = previewsEnabled ? '' : 'disabled';
-    btn.addEventListener('click', () => {
-      previewsEnabled = !previewsEnabled;
+    btn.addEventListener('click', () => togglePreviews());
+    document.body.appendChild(btn);
+
+    // Settings gear button (positioned above toggle)
+    const gear = document.createElement('button');
+    Object.assign(gear.style, {
+      position: 'fixed', bottom: '72px', right: '20px',
+      width: '32px', height: '32px', borderRadius: '50%', border: 'none',
+      background: '#333', color: '#ccc', fontSize: '16px', cursor: 'pointer',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.3)', zIndex: '99999',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      transition: 'transform 0.2s',
+    });
+    gear.textContent = '\u2699';
+    gear.title = 'Preview Settings';
+    gear.addEventListener('mouseenter', () => { gear.style.transform = 'rotate(30deg)'; });
+    gear.addEventListener('mouseleave', () => { gear.style.transform = ''; });
+    gear.addEventListener('click', () => {
+      const panel = document.getElementById(SETTINGS_ID);
+      if (panel) panel.classList.toggle('active');
+    });
+    document.body.appendChild(gear);
+  };
+
+  /** Toggles all previews on/off */
+  function togglePreviews() {
+    previewsEnabled = !previewsEnabled;
+    const btn = document.getElementById(TOGGLE_ID);
+    if (btn) {
       btn.textContent = previewsEnabled ? '\uD83D\uDC41' : '\uD83D\uDEAB';
       btn.className = previewsEnabled ? '' : 'disabled';
-      saveSettings({ ...loadSettings(), enabled: previewsEnabled });
-      toggleAllPreviews(previewsEnabled);
-    });
-    document.body.appendChild(btn);
-  };
+    }
+    saveSettings({ enabled: previewsEnabled });
+    toggleAllPreviews(previewsEnabled);
+  }
 
   /** @param {boolean} show */
   function toggleAllPreviews(show) {
     document.querySelectorAll('.n8n-preview-container').forEach(el => {
-      el.style.display = show ? '' : 'none';
+      if (show) {
+        el.classList.remove('n8n-preview-slide-out');
+        el.style.display = '';
+      } else {
+        el.classList.add('n8n-preview-slide-out');
+        setTimeout(() => { el.style.display = 'none'; }, 200);
+      }
     });
-    // Update count badges on all cached nodes
     for (const [nodeName, data] of previewCache) {
       const node = findCanvasNode(nodeName);
       if (node) {
@@ -461,6 +620,163 @@
     const ext = mimeType.split('/')[1] || '';
     info.textContent = `${fileName} \u2022 ${ext.toUpperCase()}`;
     lb.classList.add('active');
+  }
+
+  // ─── Settings Panel ──────────────────────────────────────
+
+  /**
+   * Creates and injects the settings panel with size, auto-show, video toggle, and clear controls.
+   */
+  const injectSettingsPanel = () => {
+    const panel = document.createElement('div');
+    panel.id = SETTINGS_ID;
+
+    const title = document.createElement('div');
+    title.className = 'n8n-settings-title';
+    title.textContent = 'Preview Settings';
+    panel.appendChild(title);
+
+    // Preview size
+    const sizeRow = document.createElement('div');
+    sizeRow.className = 'n8n-settings-row';
+    const sizeLabel = document.createElement('label');
+    sizeLabel.textContent = 'Preview Size';
+    sizeRow.appendChild(sizeLabel);
+    const sizeSelect = document.createElement('select');
+    sizeSelect.className = 'n8n-settings-select';
+    for (const s of ['sm', 'md', 'lg']) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.toUpperCase();
+      if (settings.size === s) opt.selected = true;
+      sizeSelect.appendChild(opt);
+    }
+    sizeSelect.addEventListener('change', () => {
+      saveSettings({ size: sizeSelect.value });
+      applyPreviewSize(sizeSelect.value);
+    });
+    sizeRow.appendChild(sizeSelect);
+    panel.appendChild(sizeRow);
+
+    // Auto-show toggle
+    panel.appendChild(createToggleRow('Auto-show', settings.autoShow, (val) => {
+      saveSettings({ autoShow: val });
+    }));
+
+    // Video toggle
+    panel.appendChild(createToggleRow('Videos', settings.videoEnabled, (val) => {
+      saveSettings({ videoEnabled: val });
+      reRenderAll();
+    }));
+
+    // Clear all button
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'n8n-settings-btn';
+    clearBtn.textContent = 'Clear All Previews';
+    clearBtn.addEventListener('click', () => {
+      previewCache.clear();
+      collapsedNodes.clear();
+      document.querySelectorAll('.n8n-preview-container, .n8n-preview-count-badge').forEach(el => el.remove());
+    });
+    panel.appendChild(clearBtn);
+
+    // Close when clicking outside
+    document.addEventListener('click', (e) => {
+      if (panel.classList.contains('active') && !panel.contains(e.target) &&
+          !e.target.textContent?.includes('\u2699')) {
+        panel.classList.remove('active');
+      }
+    });
+
+    document.body.appendChild(panel);
+  };
+
+  /**
+   * Creates a toggle row for the settings panel.
+   * @param {string} label
+   * @param {boolean} initialValue
+   * @param {function} onChange
+   * @returns {HTMLElement}
+   */
+  function createToggleRow(label, initialValue, onChange) {
+    const row = document.createElement('div');
+    row.className = 'n8n-settings-row';
+    const lbl = document.createElement('label');
+    lbl.textContent = label;
+    row.appendChild(lbl);
+    const toggle = document.createElement('button');
+    toggle.className = 'n8n-settings-toggle' + (initialValue ? ' on' : '');
+    toggle.addEventListener('click', () => {
+      const newVal = !toggle.classList.contains('on');
+      toggle.classList.toggle('on');
+      onChange(newVal);
+    });
+    row.appendChild(toggle);
+    return row;
+  }
+
+  /**
+   * Applies preview thumbnail size to all existing preview items.
+   * @param {string} size - 'sm' | 'md' | 'lg'
+   */
+  function applyPreviewSize(size) {
+    const px = SIZE_MAP[size] || SIZE_MAP.md;
+    document.querySelectorAll('.n8n-preview-item, .n8n-preview-more').forEach(el => {
+      el.style.width = px + 'px';
+      el.style.height = px + 'px';
+    });
+  }
+
+  /** Re-renders all cached previews (e.g. after settings change). */
+  function reRenderAll() {
+    for (const [nodeName, data] of previewCache) {
+      renderPreviewsOnNode(nodeName, data.items);
+    }
+  }
+
+  // ─── Keyboard Shortcut ──────────────────────────────────
+
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+P to toggle all previews
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyP') {
+      e.preventDefault();
+      togglePreviews();
+    }
+    // Escape to close lightbox
+    if (e.code === 'Escape') {
+      const lb = document.getElementById(LIGHTBOX_ID);
+      if (lb?.classList.contains('active')) {
+        lb.classList.remove('active');
+        const content = lb.querySelector('.n8n-lightbox-content');
+        while (content?.firstChild) content.removeChild(content.firstChild);
+      }
+      const sp = document.getElementById(SETTINGS_ID);
+      if (sp?.classList.contains('active')) sp.classList.remove('active');
+    }
+  });
+
+  // ─── Running Node Detection ─────────────────────────────
+
+  /**
+   * Watches for running workflow executions and adds pulsing ring to active nodes.
+   */
+  function watchRunningNodes() {
+    const checkRunning = () => {
+      // N8N adds data attributes/classes to running nodes
+      const allNodes = document.querySelectorAll('.vue-flow__node[data-id]');
+      for (const node of allNodes) {
+        const isRunning = node.classList.contains('executing') ||
+                          node.querySelector('[class*="running"]') ||
+                          node.querySelector('[class*="executing"]') ||
+                          node.querySelector('.spinner');
+        if (isRunning) {
+          node.classList.add('n8n-preview-running');
+        } else {
+          node.classList.remove('n8n-preview-running');
+        }
+      }
+    };
+    setInterval(checkRunning, 1000);
   }
 
   // ─── DOM Node Finders ───────────────────────────────────
@@ -666,7 +982,19 @@
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
 
-    // Header with timestamp and output count
+    // Filter out videos if disabled in settings
+    const filteredItems = settings.videoEnabled
+      ? mediaItems
+      : mediaItems.filter(b => !b.mimeType.startsWith('video/'));
+    if (filteredItems.length === 0) return;
+
+    // Check if this node is collapsed
+    if (collapsedNodes.has(nodeName)) {
+      updateCountBadge(node, filteredItems.length);
+      return;
+    }
+
+    // Header with timestamp, output count, and controls
     const cached = previewCache.get(nodeName);
     const header = document.createElement('div');
     header.className = 'n8n-preview-header';
@@ -676,24 +1004,53 @@
     tsSpan.textContent = cached ? `Last run: ${timeAgo(cached.timestamp)}` : '';
     header.appendChild(tsSpan);
 
+    const rightControls = document.createElement('div');
+    rightControls.className = 'n8n-preview-node-controls';
+
     const countSpan = document.createElement('span');
     countSpan.className = 'n8n-preview-output-label';
-    const imgCount = mediaItems.filter(b => b.mimeType.startsWith('image/')).length;
-    const vidCount = mediaItems.filter(b => b.mimeType.startsWith('video/')).length;
-    const parts = [];
-    if (imgCount > 0) parts.push(`${imgCount} img`);
-    if (vidCount > 0) parts.push(`${vidCount} vid`);
-    countSpan.textContent = parts.join(' \u2022 ');
-    header.appendChild(countSpan);
+    const imgCount = filteredItems.filter(b => b.mimeType.startsWith('image/')).length;
+    const vidCount = filteredItems.filter(b => b.mimeType.startsWith('video/')).length;
+    const countParts = [];
+    if (imgCount > 0) countParts.push(`${imgCount} img`);
+    if (vidCount > 0) countParts.push(`${vidCount} vid`);
+    countSpan.textContent = countParts.join(' \u2022 ');
+    rightControls.appendChild(countSpan);
 
+    // Collapse button
+    const collapseBtn = document.createElement('button');
+    collapseBtn.className = 'n8n-preview-ctrl-btn';
+    collapseBtn.textContent = '\u203A'; // ›
+    collapseBtn.title = 'Collapse';
+    collapseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      collapsedNodes.add(nodeName);
+      renderPreviewsOnNode(nodeName, binaryItems);
+    });
+    rightControls.appendChild(collapseBtn);
+
+    // Dismiss button
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'n8n-preview-ctrl-btn';
+    dismissBtn.textContent = '\u2715'; // ✕
+    dismissBtn.title = 'Dismiss';
+    dismissBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      container.classList.add('n8n-preview-slide-out');
+      setTimeout(() => container.remove(), 200);
+      previewCache.delete(nodeName);
+    });
+    rightControls.appendChild(dismissBtn);
+
+    header.appendChild(rightControls);
     container.appendChild(header);
 
     // Media strip
     const strip = document.createElement('div');
     strip.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;';
 
-    const visibleItems = mediaItems.slice(0, MAX_ITEMS_VISIBLE);
-    const remaining = mediaItems.length - MAX_ITEMS_VISIBLE;
+    const visibleItems = filteredItems.slice(0, MAX_ITEMS_VISIBLE);
+    const remaining = filteredItems.length - MAX_ITEMS_VISIBLE;
 
     for (const item of visibleItems) {
       const el = item.mimeType.startsWith('video/')
@@ -708,7 +1065,7 @@
       more.textContent = `+${remaining} more`;
       more.addEventListener('click', (e) => {
         e.stopPropagation();
-        const next = mediaItems[MAX_ITEMS_VISIBLE];
+        const next = filteredItems[MAX_ITEMS_VISIBLE];
         if (next) {
           openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'media');
         }
@@ -892,7 +1249,14 @@
   injectBadge();
   injectToggle();
   injectLightbox();
+  injectSettingsPanel();
   watchCanvasChanges();
+  watchRunningNodes();
+
+  // Apply saved preview size
+  if (settings.size && settings.size !== 'md') {
+    applyPreviewSize(settings.size);
+  }
 
   // Start polling after a brief delay
   setTimeout(() => {
