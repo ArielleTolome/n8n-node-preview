@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.6';
+  const VERSION = '2.0.7';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -797,7 +797,15 @@ else { window.__n8nPreviewLoaded = true;
     return null;
   }
 
-  function binaryUrl(id) { return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`; }
+  function binaryUrl(id) {
+    // Convert filesystem-v2:<path> → /n8n-preview/binary/<path>
+    // This serves directly from the Docker volume via Nginx (no session/browserId needed)
+    if (id && id.startsWith('filesystem-v2:')) {
+      return '/n8n-preview/binary/' + id.slice('filesystem-v2:'.length);
+    }
+    // Fallback for other storage backends
+    return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`;
+  }
 
   function formatSize(bytes) {
     if (!bytes || bytes <= 0) return '';
@@ -1384,10 +1392,13 @@ else { window.__n8nPreviewLoaded = true;
       const resp = await apiRequest('/api/v1/executions?limit=5&includeData=true');
       if (!resp.ok) return;
       const body = await resp.json();
+      // Filter to current workflow only — avoids picking up executions from other workflows
+      const currentWfId = location.href.split('/workflow/')[1]?.split(/[/?#]/)[0] || '';
       const execs = (body?.data || []).sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0));
       for (const exec of execs) {
         if (!exec.id || exec.id === lastExecutionId) continue;
         if (exec.status !== 'success' && exec.finished !== true) continue;
+        if (currentWfId && exec.workflowId && exec.workflowId !== currentWfId) continue;
         lastExecutionId = exec.id;
         processExecution(exec);
         break;
@@ -2058,37 +2069,7 @@ else { window.__n8nPreviewLoaded = true;
 
   // ─── API Key Fallback — removed (handled by apiRequest() + nginx pre-injection) ───
 
-  // ─── Multi-Workflow URL Change Detection ──────────────
-  let lastWorkflowUrl = window.location.pathname;
-
-  function checkWorkflowChange() {
-    const current = window.location.pathname;
-    if (current !== lastWorkflowUrl) {
-      lastWorkflowUrl = current;
-      // Clear previews on workflow switch
-      previewCache.clear();
-      lastExecutionId = null;
-      document.querySelectorAll(
-        '.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge, .n8n-preview-error-state, .n8n-preview-spinner'
-      ).forEach(el => el.remove());
-      document.querySelectorAll('.n8n-preview-executing').forEach(el => el.classList.remove('n8n-preview-executing'));
-      executingNodes.clear();
-      console.log('[N8N Preview] Workflow changed, cleared previews');
-    }
-  }
-
-  // Listen for SPA navigation
-  const origPushState = history.pushState;
-  history.pushState = function (...args) {
-    origPushState.apply(this, args);
-    checkWorkflowChange();
-  };
-  const origReplaceState = history.replaceState;
-  history.replaceState = function (...args) {
-    origReplaceState.apply(this, args);
-    checkWorkflowChange();
-  };
-  window.addEventListener('popstate', checkWorkflowChange);
+  // ─── Multi-Workflow URL Change Detection (handled by watchWorkflowChanges below) ───
 
   // ─── Large Execution Cap ──────────────────────────────
   // Patch extractBinaryFromExecution to cap at MAX_BINARY_ITEMS
@@ -2123,8 +2104,10 @@ else { window.__n8nPreviewLoaded = true;
     const check = () => {
       const url = location.href;
       if (url !== currentWorkflowUrl) {
-        const oldWf = currentWorkflowUrl.split('/workflow/')[1]?.split(/[?#]/)[0] || '';
-        const newWf = url.split('/workflow/')[1]?.split(/[?#]/)[0] || '';
+        // Split on /[/?#]/ to stop at the first slash, query param, or hash after the workflow ID
+        // Without this, /workflow/ID/executions/123 and /workflow/ID are seen as different workflows
+        const oldWf = currentWorkflowUrl.split('/workflow/')[1]?.split(/[/?#]/)[0] || '';
+        const newWf = url.split('/workflow/')[1]?.split(/[/?#]/)[0] || '';
         currentWorkflowUrl = url;
         if (oldWf !== newWf && oldWf && newWf) {
           previewCache.clear();
