@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v1.0.0
+ * N8N Node Preview Injector v1.1.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
@@ -21,6 +21,8 @@
   const MAX_CACHED_EXECUTIONS = 3;
   const VIDEO_INLINE_MAX_BYTES = 5 * 1024 * 1024;
   const DEBOUNCE_MS = 150;
+  const WS_RECONNECT_DELAY = 3000;
+  const WS_MAX_RETRIES = 5;
 
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
   if (isAlreadyLoaded()) return;
@@ -41,6 +43,12 @@
   /** @type {Map<string, {items: Array, timestamp: number, executionId: string}>} */
   const previewCache = new Map();
   let executionCount = 0;
+  let wsConnection = null;
+  let wsRetries = 0;
+  let wsConnected = false;
+  let pollingActive = true;
+  let pollTimer = null;
+  const executingNodes = new Set();
 
   function loadSettings() {
     try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) }; }
@@ -76,6 +84,41 @@
         transition: opacity 0.3s; z-index: 9999; margin-left: 8px; line-height: 1;
       }
       #${BADGE_ID}:hover { opacity: 0.85; }
+      .n8n-preview-ws-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        display: inline-block; margin-right: 2px;
+        transition: background 0.3s;
+      }
+      .n8n-preview-ws-dot.connected { background: #4caf50; }
+      .n8n-preview-ws-dot.polling { background: #ffc107; }
+      .n8n-preview-ws-dot.disconnected { background: #f44336; }
+
+      .n8n-preview-executing {
+        position: relative;
+      }
+      .n8n-preview-executing::after {
+        content: ''; position: absolute; inset: -3px;
+        border-radius: inherit; border: 2px solid #ff9800;
+        animation: n8nPreviewPulse 1.2s ease-in-out infinite;
+        pointer-events: none; z-index: 1;
+      }
+      @keyframes n8nPreviewPulse {
+        0%, 100% { opacity: 0.3; transform: scale(1); }
+        50% { opacity: 0.8; transform: scale(1.02); }
+      }
+      .n8n-preview-spinner {
+        display: flex; align-items: center; gap: 4px;
+        padding: 4px 8px; font-size: 9px; color: #ff9800;
+        font-family: monospace; animation: n8nPreviewFadeIn 0.2s ease-out;
+      }
+      .n8n-preview-spinner::before {
+        content: ''; width: 10px; height: 10px;
+        border: 2px solid rgba(255,152,0,0.3); border-top-color: #ff9800;
+        border-radius: 50%; animation: n8nPreviewSpin 0.8s linear infinite;
+      }
+      @keyframes n8nPreviewSpin {
+        to { transform: rotate(360deg); }
+      }
 
       .n8n-preview-fade-in { animation: n8nPreviewFadeIn 0.3s ease-out; }
       @keyframes n8nPreviewFadeIn {
@@ -268,7 +311,11 @@
         if (target) {
           const badge = document.createElement('span');
           badge.id = BADGE_ID; badge.className = 'n8n-preview-fade-in';
-          badge.textContent = '\u2728 Preview Active';
+          const wsDot = document.createElement('span');
+          wsDot.className = 'n8n-preview-ws-dot polling';
+          wsDot.title = 'Polling fallback';
+          badge.appendChild(wsDot);
+          badge.appendChild(document.createTextNode(' \u2728 Preview Active'));
           badge.title = `N8N Node Preview v${VERSION}`;
           if (sel.includes('sidebar')) target.parentElement?.insertBefore(badge, target.nextSibling);
           else target.appendChild(badge);
@@ -285,7 +332,11 @@
       if (!document.getElementById(BADGE_ID)) {
         const fb = document.createElement('div');
         fb.id = BADGE_ID; fb.className = 'n8n-preview-fade-in';
-        fb.textContent = '\u2728 Preview Active'; fb.title = `N8N Node Preview v${VERSION}`;
+        const wsDotFb = document.createElement('span');
+        wsDotFb.className = 'n8n-preview-ws-dot polling';
+        fb.appendChild(wsDotFb);
+        fb.appendChild(document.createTextNode(' \u2728 Preview Active'));
+        fb.title = `N8N Node Preview v${VERSION}`;
         Object.assign(fb.style, { position: 'fixed', top: '10px', right: '10px', zIndex: '99999' });
         document.body.appendChild(fb);
       }
@@ -742,6 +793,174 @@
     window.__n8nPreviewLazyObserver = lazyObserver;
   }
 
+  // ─── WebSocket ─────────────────────────────────────────
+  function updateWsDot(state) {
+    const dot = document.querySelector('.n8n-preview-ws-dot');
+    if (!dot) return;
+    dot.className = 'n8n-preview-ws-dot ' + state;
+    dot.title = state === 'connected' ? 'WebSocket live' :
+                state === 'polling' ? 'Polling fallback' : 'Disconnected';
+  }
+
+  function addNodeSpinner(nodeName) {
+    const node = findCanvasNode(nodeName);
+    if (!node) return;
+    node.classList.add('n8n-preview-executing');
+    if (node.querySelector('.n8n-preview-spinner')) return;
+    const spinner = document.createElement('div');
+    spinner.className = 'n8n-preview-spinner';
+    spinner.textContent = 'Running\u2026';
+    node.appendChild(spinner);
+  }
+
+  function removeNodeSpinner(nodeName) {
+    const node = findCanvasNode(nodeName);
+    if (!node) {
+      executingNodes.delete(nodeName);
+      return;
+    }
+    node.classList.remove('n8n-preview-executing');
+    const spinner = node.querySelector('.n8n-preview-spinner');
+    if (spinner) spinner.remove();
+    executingNodes.delete(nodeName);
+  }
+
+  function startPollingFallback() {
+    if (pollingActive) return;
+    pollingActive = true;
+    updateWsDot('polling');
+    console.log('[N8N Preview] Falling back to polling');
+    pollTimer = setInterval(pollExecutions, POLL_INTERVAL);
+  }
+
+  function stopPolling() {
+    pollingActive = false;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function connectWebSocket() {
+    if (wsConnection && wsConnection.readyState <= 1) return;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/push`;
+
+    try {
+      wsConnection = new WebSocket(wsUrl);
+    } catch (err) {
+      console.warn('[N8N Preview] WS creation failed:', err.message);
+      startPollingFallback();
+      return;
+    }
+
+    wsConnection.onopen = () => {
+      wsConnected = true;
+      wsRetries = 0;
+      stopPolling();
+      updateWsDot('connected');
+      console.log('[N8N Preview] WebSocket connected');
+    };
+
+    wsConnection.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleWsMessage(msg);
+      } catch { /* ignore non-JSON frames */ }
+    };
+
+    wsConnection.onclose = () => {
+      wsConnected = false;
+      startPollingFallback();
+      scheduleReconnect();
+    };
+
+    wsConnection.onerror = () => {
+      wsConnected = false;
+      updateWsDot('disconnected');
+    };
+  }
+
+  function scheduleReconnect() {
+    if (wsRetries >= WS_MAX_RETRIES) {
+      console.warn('[N8N Preview] Max WS retries reached, staying on polling');
+      updateWsDot('polling');
+      return;
+    }
+    wsRetries++;
+    const delay = WS_RECONNECT_DELAY * wsRetries;
+    setTimeout(connectWebSocket, delay);
+  }
+
+  function handleWsMessage(msg) {
+    // N8N push messages can have different structures
+    const type = msg.type || msg.eventName || (msg.data && msg.data.type);
+    const payload = msg.data || msg;
+
+    switch (type) {
+      case 'executionFinished':
+      case 'executionCompleted': {
+        const execId = payload.executionId || payload.data?.executionId;
+        if (execId && execId !== lastExecutionId) {
+          lastExecutionId = execId;
+          fetchAndProcessExecution(execId);
+        }
+        // Clear all executing spinners
+        for (const name of executingNodes) removeNodeSpinner(name);
+        break;
+      }
+
+      case 'nodeExecuteAfter': {
+        const nodeName = payload.nodeName || payload.data?.nodeName;
+        if (nodeName) {
+          removeNodeSpinner(nodeName);
+          // If payload contains binary data, inject preview immediately
+          const nodeData = payload.data || payload;
+          if (nodeData.data?.main || nodeData.executionData?.data?.main) {
+            const runData = {};
+            runData[nodeName] = [{ data: nodeData.data || nodeData.executionData?.data }];
+            const fakeExec = { data: { resultData: { runData } } };
+            processExecution(fakeExec);
+          }
+        }
+        break;
+      }
+
+      case 'nodeExecuteBefore':
+      case 'workflowExecutingNode': {
+        const nodeName = payload.nodeName || payload.data?.nodeName;
+        if (nodeName) {
+          executingNodes.add(nodeName);
+          addNodeSpinner(nodeName);
+        }
+        break;
+      }
+
+      case 'executionStarted':
+      case 'workflowExecuteStart':
+        // Workflow started — nothing to preview yet
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  async function fetchAndProcessExecution(executionId) {
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const apiKey = localStorage.getItem('n8n-preview-apikey');
+      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
+      const resp = await originalFetch(`/rest/executions/${encodeURIComponent(executionId)}?includeData=true`, {
+        credentials: 'include', headers,
+      });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      const execData = body.data || body;
+      processExecution(execData);
+    } catch (err) {
+      console.warn('[N8N Preview] Fetch execution error:', err.message);
+    }
+  }
+
   // ─── Init ───────────────────────────────────────────────
   injectStyles();
   injectBadge();
@@ -749,6 +968,12 @@
   injectSettingsPanel();
   injectLightbox();
   watchCanvasChanges();
-  setTimeout(() => { pollExecutions(); setInterval(pollExecutions, POLL_INTERVAL); }, 2000);
+  // Start WS, fall back to polling
+  setTimeout(() => {
+    connectWebSocket();
+    // Initial poll + fallback timer (WS onopen will stop polling if connected)
+    pollExecutions();
+    pollTimer = setInterval(pollExecutions, POLL_INTERVAL);
+  }, 2000);
 
 })();
