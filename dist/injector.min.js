@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v1.1.0
+ * N8N Node Preview Injector v1.2.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
@@ -294,6 +294,86 @@
         background: none; border: none; line-height: 1;
       }
       .n8n-lightbox-close:hover { opacity: 1; }
+
+      .n8n-preview-file-icon {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        width: 100%; height: 100%; background: #1a1a2e; gap: 2px;
+        font-size: 18px; line-height: 1;
+      }
+      .n8n-preview-file-label {
+        font-size: 7px; font-weight: 600; color: #ccc;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .n8n-preview-json-box {
+        width: 100%; height: 100%; overflow: hidden;
+        padding: 3px 4px; font-family: monospace; font-size: 6px;
+        line-height: 1.3; color: #8be9fd; background: #1a1a2e;
+        white-space: pre; text-align: left;
+      }
+      .n8n-preview-csv-table {
+        width: 100%; height: 100%; overflow: hidden;
+        font-family: monospace; font-size: 6px; color: #ccc;
+        background: #1a1a2e; border-collapse: collapse;
+      }
+      .n8n-preview-csv-table td {
+        padding: 1px 2px; border: 1px solid rgba(255,255,255,0.08);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        max-width: 40px;
+      }
+      .n8n-preview-csv-table tr:first-child td {
+        color: #ff9800; font-weight: 600;
+      }
+      .n8n-preview-audio-wave {
+        display: flex; align-items: flex-end; justify-content: center;
+        gap: 1px; width: 100%; height: 60%; padding: 0 4px;
+      }
+      .n8n-preview-audio-bar {
+        width: 3px; background: #ff9800; border-radius: 1px;
+        animation: n8nAudioPulse 1.2s ease-in-out infinite alternate;
+      }
+      @keyframes n8nAudioPulse {
+        from { opacity: 0.4; } to { opacity: 1; }
+      }
+      .n8n-preview-actions {
+        position: absolute; top: 2px; right: 2px;
+        display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s;
+        z-index: 5;
+      }
+      .n8n-preview-item:hover .n8n-preview-actions { opacity: 1; }
+      .n8n-preview-action-btn {
+        width: 16px; height: 16px; border-radius: 3px;
+        background: rgba(0,0,0,0.7); border: none; color: #fff;
+        font-size: 9px; cursor: pointer; display: flex;
+        align-items: center; justify-content: center;
+        transition: background 0.15s; padding: 0; line-height: 1;
+      }
+      .n8n-preview-action-btn:hover { background: rgba(255,152,0,0.8); }
+      .n8n-preview-size-label {
+        position: absolute; bottom: 0; right: 0;
+        padding: 0 3px; background: rgba(0,0,0,0.6);
+        color: #aaa; font-size: 6px; font-family: monospace;
+        border-radius: 3px 0 0 0; line-height: 1.4;
+      }
+
+      .n8n-lightbox-json {
+        max-width: 80vw; max-height: 80vh; overflow: auto;
+        background: #1e1e2e; border-radius: 8px; padding: 20px;
+        font-family: monospace; font-size: 13px; color: #8be9fd;
+        white-space: pre-wrap; word-break: break-word;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      }
+      .n8n-lightbox-csv {
+        max-width: 90vw; max-height: 80vh; overflow: auto;
+        background: #1e1e2e; border-radius: 8px; padding: 16px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      }
+      .n8n-lightbox-csv table {
+        border-collapse: collapse; font-family: monospace; font-size: 12px; color: #ccc;
+      }
+      .n8n-lightbox-csv td, .n8n-lightbox-csv th {
+        padding: 4px 8px; border: 1px solid #333; text-align: left;
+      }
+      .n8n-lightbox-csv th { color: #ff9800; font-weight: 600; background: #252535; }
     `;
     document.head.appendChild(style);
   };
@@ -538,6 +618,9 @@
     ov.className = 'n8n-preview-overlay';
     ov.textContent = item.fileName || (item.mimeType.split('/')[1] || '').toUpperCase();
     w.appendChild(img); w.appendChild(ov);
+    w.appendChild(createActionButtons(item));
+    const szLabel = createSizeLabel(item);
+    if (szLabel) w.appendChild(szLabel);
     w.addEventListener('click', (e) => {
       e.stopPropagation(); openLightbox(img.src, item.mimeType, item.fileName || 'image');
     });
@@ -571,10 +654,325 @@
     const ov = document.createElement('div'); ov.className = 'n8n-preview-overlay';
     ov.textContent = item.fileName || ext.toUpperCase();
     w.appendChild(ov);
+    w.appendChild(createActionButtons(item));
     w.addEventListener('click', (e) => {
       e.stopPropagation(); openLightbox(src, item.mimeType, item.fileName || 'video');
     });
     return w;
+  }
+
+  // ─── Download + Copy Helpers ────────────────────────────
+  function createActionButtons(item) {
+    const actions = document.createElement('div');
+    actions.className = 'n8n-preview-actions';
+    // Download
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'n8n-preview-action-btn'; dlBtn.textContent = '\u2B07';
+    dlBtn.title = 'Download';
+    dlBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const a = document.createElement('a');
+      a.href = binaryUrl(item.id); a.download = item.fileName || 'download';
+      a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove();
+    });
+    actions.appendChild(dlBtn);
+    // Copy (images only)
+    if (item.mimeType.startsWith('image/') && navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+      const cpBtn = document.createElement('button');
+      cpBtn.className = 'n8n-preview-action-btn'; cpBtn.textContent = '\uD83D\uDCCB';
+      cpBtn.title = 'Copy to clipboard';
+      cpBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          const resp = await originalFetch(binaryUrl(item.id));
+          const blob = await resp.blob();
+          const pngBlob = blob.type === 'image/png' ? blob :
+            await new Promise(resolve => {
+              const img = new Image(); img.crossOrigin = 'anonymous';
+              img.onload = () => {
+                const c = document.createElement('canvas');
+                c.width = img.naturalWidth; c.height = img.naturalHeight;
+                c.getContext('2d').drawImage(img, 0, 0);
+                c.toBlob(resolve, 'image/png');
+              };
+              img.src = URL.createObjectURL(blob);
+            });
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+          cpBtn.textContent = '\u2705';
+          setTimeout(() => { cpBtn.textContent = '\uD83D\uDCCB'; }, 1500);
+        } catch { cpBtn.textContent = '\u274C'; setTimeout(() => { cpBtn.textContent = '\uD83D\uDCCB'; }, 1500); }
+      });
+      actions.appendChild(cpBtn);
+    }
+    return actions;
+  }
+
+  function createSizeLabel(item) {
+    if (!item.fileSize) return null;
+    const el = document.createElement('div');
+    el.className = 'n8n-preview-size-label';
+    el.textContent = formatSize(item.fileSize);
+    return el;
+  }
+
+  function makeFileIcon(emoji, label) {
+    const icon = document.createElement('div');
+    icon.className = 'n8n-preview-file-icon';
+    const emoSpan = document.createElement('span');
+    emoSpan.textContent = emoji;
+    const lblSpan = document.createElement('span');
+    lblSpan.className = 'n8n-preview-file-label';
+    lblSpan.textContent = label;
+    icon.appendChild(emoSpan);
+    icon.appendChild(lblSpan);
+    return icon;
+  }
+
+  // ─── PDF Preview ──────────────────────────────────────
+  function createPdfPreview(item) {
+    const sz = getItemSize();
+    const w = document.createElement('div');
+    w.className = 'n8n-preview-item';
+    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+
+    w.appendChild(makeFileIcon('\uD83D\uDCC4', 'PDF'));
+    w.appendChild(createActionButtons(item));
+    const szLabel = createSizeLabel(item);
+    if (szLabel) w.appendChild(szLabel);
+
+    // Attempt pdf.js rendering
+    (async () => {
+      try {
+        if (!window.pdfjsLib) {
+          const script = document.createElement('script');
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          await new Promise((resolve, reject) => {
+            script.onload = resolve; script.onerror = reject;
+            document.head.appendChild(script);
+          });
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+              'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          }
+        }
+        if (!window.pdfjsLib) return;
+        const pdfData = await originalFetch(binaryUrl(item.id)).then(r => r.arrayBuffer());
+        const pdf = await window.pdfjsLib.getDocument({ data: pdfData }).promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: sz / page.getViewport({ scale: 1 }).width });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        canvas.style.width = '100%'; canvas.style.height = '100%';
+        canvas.style.objectFit = 'cover'; canvas.style.display = 'block';
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        while (w.firstChild) w.removeChild(w.firstChild);
+        w.appendChild(canvas);
+        w.appendChild(createActionButtons(item));
+        const ov = document.createElement('div');
+        ov.className = 'n8n-preview-overlay';
+        ov.textContent = pdf.numPages + ' page' + (pdf.numPages > 1 ? 's' : '');
+        w.appendChild(ov);
+        if (szLabel) w.appendChild(createSizeLabel(item));
+      } catch { /* keep icon fallback */ }
+    })();
+
+    w.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.open(binaryUrl(item.id), '_blank');
+    });
+    return w;
+  }
+
+  // ─── JSON Preview ─────────────────────────────────────
+  function createJsonPreview(item) {
+    const sz = getItemSize();
+    const w = document.createElement('div');
+    w.className = 'n8n-preview-item';
+    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+
+    w.appendChild(makeFileIcon('{ }', 'JSON'));
+    w.appendChild(createActionButtons(item));
+
+    (async () => {
+      try {
+        const text = await originalFetch(binaryUrl(item.id)).then(r => r.text());
+        const parsed = JSON.parse(text);
+        const entries = Object.entries(parsed).slice(0, 5);
+        const box = document.createElement('div');
+        box.className = 'n8n-preview-json-box';
+        box.textContent = entries.map(([k, v]) => {
+          const val = typeof v === 'object' ? JSON.stringify(v).slice(0, 20) : String(v).slice(0, 20);
+          return '"' + k + '": ' + val;
+        }).join('\n');
+        while (w.firstChild) w.removeChild(w.firstChild);
+        w.appendChild(box);
+        w.appendChild(createActionButtons(item));
+        const szLabel2 = createSizeLabel(item);
+        if (szLabel2) w.appendChild(szLabel2);
+        w._jsonData = text;
+      } catch { /* keep icon */ }
+    })();
+
+    w.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const lb = document.getElementById(LIGHTBOX_ID);
+      if (!lb) return;
+      const content = lb.querySelector('.n8n-lightbox-content');
+      const info = lb.querySelector('.n8n-lightbox-info');
+      while (content.firstChild) content.removeChild(content.firstChild);
+      const pre = document.createElement('div');
+      pre.className = 'n8n-lightbox-json';
+      try { pre.textContent = JSON.stringify(JSON.parse(w._jsonData || '{}'), null, 2); }
+      catch { pre.textContent = w._jsonData || 'Unable to parse JSON'; }
+      content.appendChild(pre);
+      info.textContent = (item.fileName || 'data.json') + ' \u2022 JSON';
+      lb.classList.add('active');
+    });
+    return w;
+  }
+
+  // ─── CSV Preview ──────────────────────────────────────
+  function createCsvPreview(item) {
+    const sz = getItemSize();
+    const w = document.createElement('div');
+    w.className = 'n8n-preview-item';
+    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+
+    w.appendChild(makeFileIcon('\uD83D\uDCCA', 'CSV'));
+    w.appendChild(createActionButtons(item));
+
+    (async () => {
+      try {
+        const text = await originalFetch(binaryUrl(item.id)).then(r => r.text());
+        const lines = text.split('\n').filter(l => l.trim());
+        const rows = lines.slice(0, 3).map(l => l.split(',').slice(0, 4));
+        const table = document.createElement('table');
+        table.className = 'n8n-preview-csv-table';
+        for (const row of rows) {
+          const tr = document.createElement('tr');
+          for (const cell of row) {
+            const td = document.createElement('td');
+            td.textContent = cell.trim().replace(/^"|"$/g, '').slice(0, 10);
+            tr.appendChild(td);
+          }
+          table.appendChild(tr);
+        }
+        while (w.firstChild) w.removeChild(w.firstChild);
+        w.appendChild(table);
+        w.appendChild(createActionButtons(item));
+        const meta = document.createElement('div'); meta.className = 'n8n-preview-meta';
+        meta.textContent = lines.length + ' rows';
+        w.appendChild(meta);
+        w._csvData = text;
+      } catch { /* keep icon */ }
+    })();
+
+    w.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const lb = document.getElementById(LIGHTBOX_ID);
+      if (!lb) return;
+      const content = lb.querySelector('.n8n-lightbox-content');
+      const info = lb.querySelector('.n8n-lightbox-info');
+      while (content.firstChild) content.removeChild(content.firstChild);
+      const wrap = document.createElement('div');
+      wrap.className = 'n8n-lightbox-csv';
+      const csvText = w._csvData || '';
+      const lines = csvText.split('\n').filter(l => l.trim());
+      const table = document.createElement('table');
+      lines.forEach((line, i) => {
+        const tr = document.createElement('tr');
+        const cells = line.split(',');
+        for (const cell of cells) {
+          const el = document.createElement(i === 0 ? 'th' : 'td');
+          el.textContent = cell.trim().replace(/^"|"$/g, '');
+          tr.appendChild(el);
+        }
+        table.appendChild(tr);
+      });
+      wrap.appendChild(table);
+      content.appendChild(wrap);
+      info.textContent = (item.fileName || 'data.csv') + ' \u2022 ' + lines.length + ' rows';
+      lb.classList.add('active');
+    });
+    return w;
+  }
+
+  // ─── Audio Preview ────────────────────────────────────
+  function createAudioPreview(item) {
+    const sz = getItemSize();
+    const w = document.createElement('div');
+    w.className = 'n8n-preview-item';
+    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+
+    const wave = document.createElement('div');
+    wave.className = 'n8n-preview-audio-wave';
+    const barCount = Math.max(5, Math.floor(sz / 6));
+    for (let i = 0; i < barCount; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'n8n-preview-audio-bar';
+      const h = 20 + Math.random() * 60;
+      bar.style.height = h + '%';
+      bar.style.animationDelay = (i * 0.1) + 's';
+      wave.appendChild(bar);
+    }
+    w.appendChild(wave);
+
+    const meta = document.createElement('div'); meta.className = 'n8n-preview-meta';
+    const ext = item.mimeType.split('/')[1] || 'audio';
+    meta.textContent = ext;
+    w.appendChild(meta);
+
+    const ov = document.createElement('div'); ov.className = 'n8n-preview-overlay';
+    ov.textContent = item.fileName || 'Audio';
+    w.appendChild(ov);
+    w.appendChild(createActionButtons(item));
+    const szLabel = createSizeLabel(item);
+    if (szLabel) w.appendChild(szLabel);
+
+    w.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const lb = document.getElementById(LIGHTBOX_ID);
+      if (!lb) return;
+      const content = lb.querySelector('.n8n-lightbox-content');
+      const info = lb.querySelector('.n8n-lightbox-info');
+      while (content.firstChild) content.removeChild(content.firstChild);
+      const audio = document.createElement('audio');
+      audio.src = binaryUrl(item.id); audio.controls = true; audio.autoplay = true;
+      audio.style.minWidth = '300px';
+      content.appendChild(audio);
+      info.textContent = (item.fileName || 'audio') + ' \u2022 ' + ext.toUpperCase();
+      lb.classList.add('active');
+    });
+    return w;
+  }
+
+  // ─── Generic File Preview ─────────────────────────────
+  function createGenericPreview(item) {
+    const sz = getItemSize();
+    const w = document.createElement('div');
+    w.className = 'n8n-preview-item';
+    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    const ext = (item.mimeType.split('/')[1] || item.fileName?.split('.').pop() || 'file').toUpperCase();
+    w.appendChild(makeFileIcon('\uD83D\uDCC1', ext.slice(0, 5)));
+    w.appendChild(createActionButtons(item));
+    const szLabel = createSizeLabel(item);
+    if (szLabel) w.appendChild(szLabel);
+    w.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.open(binaryUrl(item.id), '_blank');
+    });
+    return w;
+  }
+
+  function createPreviewForItem(item) {
+    const mime = item.mimeType || '';
+    if (mime.startsWith('image/')) return createImagePreview(item);
+    if (mime.startsWith('video/') && settings.showVideos) return createVideoPreview(item);
+    if (mime === 'application/pdf') return createPdfPreview(item);
+    if (mime === 'application/json' || mime.endsWith('+json')) return createJsonPreview(item);
+    if (mime === 'text/csv' || mime === 'application/csv') return createCsvPreview(item);
+    if (mime.startsWith('audio/')) return createAudioPreview(item);
+    return createGenericPreview(item);
   }
 
   // ─── Rendering ──────────────────────────────────────────
@@ -588,20 +986,25 @@
       if (el) el.remove();
     }
 
-    let mediaItems = binaryItems.filter(b =>
-      b.mimeType.startsWith('image/') || (settings.showVideos && b.mimeType.startsWith('video/'))
-    );
-    if (mediaItems.length === 0) return;
+    // Accept all binary items now (not just image/video)
+    const previewItems = binaryItems.filter(b => {
+      const m = b.mimeType || '';
+      if (m.startsWith('video/') && !settings.showVideos) return false;
+      return true;
+    });
+    if (previewItems.length === 0) return;
 
     const header = document.createElement('div'); header.className = 'n8n-preview-header';
     const tsEl = document.createElement('span'); tsEl.className = 'n8n-preview-timestamp';
     tsEl.textContent = timestamp ? timeAgo(timestamp) : '';
     const countEl = document.createElement('span'); countEl.className = 'n8n-preview-output-label';
-    const ic = mediaItems.filter(b => b.mimeType.startsWith('image/')).length;
-    const vc = mediaItems.filter(b => b.mimeType.startsWith('video/')).length;
+    const ic = previewItems.filter(b => b.mimeType.startsWith('image/')).length;
+    const vc = previewItems.filter(b => b.mimeType.startsWith('video/')).length;
+    const fc = previewItems.length - ic - vc;
     const parts = [];
     if (ic > 0) parts.push(ic + ' img');
     if (vc > 0) parts.push(vc + ' vid');
+    if (fc > 0) parts.push(fc + ' file');
     countEl.textContent = parts.join(' \u2022 ');
     const dismiss = document.createElement('button');
     dismiss.className = 'n8n-preview-dismiss'; dismiss.textContent = '\u2715';
@@ -616,24 +1019,22 @@
 
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
-    const visible = mediaItems.slice(0, MAX_ITEMS_VISIBLE);
-    const remaining = mediaItems.length - MAX_ITEMS_VISIBLE;
+    const visible = previewItems.slice(0, MAX_ITEMS_VISIBLE);
+    const remaining = previewItems.length - MAX_ITEMS_VISIBLE;
     const sz = getItemSize();
 
     for (const item of visible) {
-      container.appendChild(
-        item.mimeType.startsWith('video/') ? createVideoPreview(item) : createImagePreview(item)
-      );
+      container.appendChild(createPreviewForItem(item));
     }
 
     if (remaining > 0) {
       const more = document.createElement('div');
       more.className = 'n8n-preview-more';
       more.style.width = sz + 'px'; more.style.height = sz + 'px';
-      more.textContent = `+${remaining}`;
+      more.textContent = '+' + remaining;
       more.addEventListener('click', (e) => {
         e.stopPropagation();
-        const next = mediaItems[MAX_ITEMS_VISIBLE];
+        const next = previewItems[MAX_ITEMS_VISIBLE];
         if (next) openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'media');
       });
       container.appendChild(more);
@@ -641,7 +1042,7 @@
 
     const badge = document.createElement('div');
     badge.className = 'n8n-preview-count-badge';
-    badge.textContent = String(mediaItems.length);
+    badge.textContent = String(previewItems.length);
     badge.style.display = previewsEnabled ? 'none' : 'flex';
 
     node.style.position = node.style.position || 'relative';

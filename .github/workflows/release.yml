@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: cp src/injector.js dist/injector.min.js
+
+      - name: Get version from tag
+        id: version
+        env:
+          REF: ${{ github.ref }}
+        run: echo "tag=${REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "N8N Node Preview ${{ steps.version.outputs.tag }}"
+          body: |
+            ## N8N Node Preview ${{ steps.version.outputs.tag }}
+
+            ### Installation
+            ```bash
+            sudo bash install.sh
+            ```
+
+            ### Quick Deploy
+            ```bash
+            cp .env.example .env
+            # Edit .env with your server details
+            ./deploy.sh
+            ```
+
+            See [README](https://github.com/ArielleTolome/n8n-node-preview#readme) for full docs.
+          files: |
+            dist/injector.min.js
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
