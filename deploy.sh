@@ -100,10 +100,11 @@ scp -P "$DEPLOY_PORT" ${SSH_KEY:+-i "$SSH_KEY"} \
 log "Nginx configs uploaded"
 
 # ─── Update Cache Buster ───────────────────────────────
-info "Updating cache buster to v=${VERSION} ..."
+CACHE_BUST=$(date +%s)
+info "Updating cache buster to v=${CACHE_BUST} ..."
 ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" \
-  "sed -i 's|injector\\.js?v=[^\"]*|injector.js?v=${VERSION}|g' ${NGINX_EXTRA_D}/n8n-ai.location.root.n8n-preview.conf"
-log "Cache buster updated"
+  "sed -i 's|injector\\.js?v=[^\"]*|injector.js?v=${CACHE_BUST}|g' ${NGINX_EXTRA_D}/n8n-ai.location.root.n8n-preview.conf"
+log "Cache buster updated (${CACHE_BUST})"
 
 # ─── Nginx Test + Reload ───────────────────────────────
 info "Testing Nginx config ..."

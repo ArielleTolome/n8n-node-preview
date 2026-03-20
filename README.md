@@ -26,18 +26,42 @@ Injects a lightweight JavaScript file via Nginx `sub_filter` that watches execut
 
 ## Features
 
+### Previews
 - **Image previews** — thumbnails on nodes with click-to-lightbox
 - **Video previews** — inline playback on hover, fullscreen in lightbox
-- **WebSocket real-time** — instant previews via N8N's `/push` WebSocket
+- **PDF previews** — pdf.js page 1 thumbnail with page count, open in new tab
+- **JSON previews** — first 5 key:value snippet, full formatted view in lightbox
+- **CSV previews** — 3-row mini table, full table in lightbox with row count
+- **Audio previews** — animated waveform bars, inline player in lightbox
+- **Generic files** — icon + extension label for any other MIME type
+- **Download button** — on all preview types, correct filename
+- **Copy to clipboard** — on images (PNG via canvas conversion)
+- **File size labels** — shown on all preview items
+
+### Real-Time
+- **WebSocket** — instant previews via N8N's `/push` WebSocket
 - **Polling fallback** — auto-fallback to 4s polling if WebSocket unavailable
 - **Connection status** — green dot (WS live), yellow dot (polling), red dot (disconnected)
 - **Running detection** — pulsing ring + spinner on executing nodes
+- **Error nodes** — red error state with error message from execution data
+
+### History & Compare
+- **Execution history** — side drawer with last 20 executions, click to replay
+- **Compare mode** — select 2 executions, split-screen visual diff
+- **Thumbnail strips** — 32px image previews in history rows
+
+### UX
 - **Settings panel** — preview size (sm/md/lg), auto-show, video toggle, clear all
-- **Per-node controls** — collapse (›) and dismiss (✕) per preview
-- **Keyboard shortcuts** — Ctrl+Shift+P toggle, Escape close
-- **Production hardened** — debounced MutationObserver, retry on error, graceful degradation
+- **Per-node controls** — dismiss (✕) per preview
+- **Keyboard shortcuts** — Ctrl+Shift+P toggle, Ctrl+Shift+H history, Escape close
+- **Dark/light mode** — auto-detects N8N theme and adapts colors
+- **Multi-workflow** — clears previews on workflow switch (pushState/popstate)
+- **API key fallback** — prompts for key on 401, persists in localStorage
+
+### Production
 - **Deploy tooling** — `deploy.sh`, `verify.sh`, `.env.example`
-- **CI/CD** — GitHub Actions auto-release on tag push
+- **Large execution cap** — max 50 binary items per execution
+- **Debounced rendering** — MutationObserver with 150ms debounce
 - **Zero dependencies** — pure vanilla JS IIFE, no build step
 
 ## Requirements
@@ -126,13 +150,34 @@ Browser ← Nginx ← N8N Docker (:5678)
            ├─ sub_filter: injects <script> before </head>
            ├─ location /n8n-preview/: serves injector.js
            │
-           └─ injector.js (vanilla JS IIFE):
-              ├─ WebSocket /push → real-time execution events
-              ├─ fetch() intercept → captures API responses
-              ├─ Polling fallback → GET /rest/executions
-              ├─ Binary extraction → parses runData for binary items
-              ├─ Canvas matching → finds nodes by name selectors
-              └─ Thumbnail rendering → img/video elements on nodes
+           └─ injector.js (vanilla JS IIFE, ~2000 lines):
+              │
+              ├─ Data Sources
+              │  ├─ WebSocket wss://<host>/push → instant execution events
+              │  ├─ fetch() intercept → captures API responses passively
+              │  └─ Polling fallback → GET /rest/executions (4s interval)
+              │
+              ├─ Processing
+              │  ├─ Binary extraction → parses runData for image/video/pdf/json/csv/audio
+              │  ├─ Error extraction → maps node errors from execution data
+              │  ├─ Execution cap → max 50 binary items per execution
+              │  └─ API key auth → X-N8N-API-KEY header on 401
+              │
+              ├─ Rendering
+              │  ├─ Canvas matching → 8 selector fallbacks for N8N versions
+              │  ├─ Preview types → image, video, PDF, JSON, CSV, audio, generic
+              │  ├─ Actions → download, copy to clipboard, lightbox
+              │  └─ Theme → auto dark/light mode detection
+              │
+              ├─ History
+              │  ├─ Last 20 executions in side drawer
+              │  ├─ Click to replay previews on canvas
+              │  └─ Compare mode → split-screen visual diff
+              │
+              └─ Lifecycle
+                 ├─ MutationObserver → debounced re-render on DOM changes
+                 ├─ pushState/popstate → clear on workflow switch
+                 └─ WS reconnect → exponential backoff, max 5 retries
 ```
 
 ### Why sub_filter?
@@ -159,7 +204,8 @@ Settings persist in `localStorage["n8n-preview-settings"]`.
 | Key | Action |
 |-----|--------|
 | Ctrl+Shift+P | Toggle all previews on/off |
-| Escape | Close lightbox / settings panel |
+| Ctrl+Shift+H | Toggle execution history panel |
+| Escape | Close lightbox / settings / compare / history |
 
 ## Project Structure
 
@@ -225,8 +271,8 @@ Script is served with 1-minute cache. After updating:
 - All HTML is built with `createElement` + `textContent` — no `innerHTML` with user data
 - Binary URLs use `encodeURIComponent` for ID parameters
 - The WebSocket connects to same-origin `/push` only
-- No external CDN dependencies — fully self-contained
-- CSP: if you use Content-Security-Policy headers, add `script-src 'self'` (the injector is served from the same origin)
+- PDF previews load pdf.js from `cdnjs.cloudflare.com` on demand — falls back to icon if blocked
+- CSP: if you use Content-Security-Policy, add `script-src 'self' https://cdnjs.cloudflare.com` (for pdf.js) or disable PDF rendering
 
 ## Contributing
 

@@ -8,20 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.0.0] - 2026-03-20
 
 ### Added
-- **Deploy tooling**: `deploy.sh` for remote deployment via SSH/SCP with `--dry-run` support
-- **Verification**: `verify.sh` checks connectivity, injector endpoint, version, HTML injection, headers
-- **Environment config**: `.env.example` with all deployment variables documented
-- **CI/CD**: GitHub Actions workflow — auto-creates release with `dist/injector.min.js` on tag push
-- **Security documentation**: CSP notes, XSS prevention details, same-origin WebSocket policy
-- **Complete README**: architecture diagram, full feature list, troubleshooting guide, deploy docs
+- **Wave 10 — Production Release**: Full deploy tooling, CI, and cross-cutting fixes
+- `deploy.sh` for remote deployment via SSH/SCP with `--dry-run` support and timestamp cache buster
+- `verify.sh` checks connectivity, injector endpoint, version, HTML injection, Nginx headers
+- `.env.example` with all deployment variables documented
+- Error node rendering: red error state with error message from execution data
+- N8N API key fallback: prompts for API key on 401, stores in localStorage
+- Multi-workflow: detects URL changes via pushState/popstate, clears previews on workflow switch
+- Large execution cap: max 50 binary items per execution with truncation warning
+- Dark/light theme adaptation: detects `data-theme` and body class, adjusts preview backgrounds
+- Touch scrolling: `-webkit-overflow-scrolling: touch` on preview containers for tablet/mobile
+- Execution sort: always sort by `startedAt` DESC to ensure most recent execution is processed first
+
+### Changed
+- All API calls now use centralized `apiRequest()` helper with auth fallback
+- Cache buster now uses version string for cache invalidation
+- Package.json scripts updated with `deploy` and `verify` commands
+
+### Fixed
+- Sub-workflow handling: error map for nodes that errored with no binary output
+- Vue Flow re-render survival: executing rings re-applied after canvas mutations
+- Workflow navigation: preview state properly cleared when switching workflows
+
+## [1.3.0] - 2026-03-20
+
+### Added
+- **Wave 9 — Execution History Panel**: Side drawer with last 20 executions
+- Click any execution to replay its previews on the canvas
+- Compare mode: select 2 executions via checkboxes, split-screen overlay for visual diff
+- Execution thumbnails in history rows (32px image strips)
+- Real-time recording of new executions into history
+- History FAB button + Ctrl+Shift+H keyboard shortcut
 
 ## [1.2.0] - 2026-03-20
 
 ### Added
-- **Wave 8 — Advanced File Previews**: Enhanced file type detection and preview rendering
-- Download button support for preview items
-- File size display on all preview types
-- Improved metadata badges with format and size info
+- **Wave 8 — Advanced File Previews**: PDF, JSON, CSV, audio, and generic file previews
+- PDF: pdf.js page 1 canvas rendering with page count, fallback to icon
+- JSON: first 5 key:value pairs in monospace box, full view in lightbox
+- CSV: mini 3-row table preview, full table in lightbox with row count
+- Audio: animated waveform bars, inline player in lightbox
+- Download button on all preview types (fetches binary, correct filename)
+- Copy to clipboard on images (PNG conversion via canvas)
+- File size label on all previews
+- Generic file icon fallback for unsupported MIME types
 
 ## [1.1.0] - 2026-03-20
 
@@ -78,6 +108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutationObserver-based toolbar detection with fixed-position fallback
 
 [2.0.0]: https://github.com/ArielleTolome/n8n-node-preview/releases/tag/v2.0.0
+[1.3.0]: https://github.com/ArielleTolome/n8n-node-preview/releases/tag/v1.3.0
 [1.2.0]: https://github.com/ArielleTolome/n8n-node-preview/releases/tag/v1.2.0
 [1.1.0]: https://github.com/ArielleTolome/n8n-node-preview/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ArielleTolome/n8n-node-preview/releases/tag/v1.0.0

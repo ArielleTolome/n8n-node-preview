@@ -5,7 +5,8 @@
   "main": "src/injector.js",
   "scripts": {
     "build": "cp src/injector.js dist/injector.min.js",
-    "deploy": "bash install.sh"
+    "deploy": "bash deploy.sh",
+    "verify": "bash verify.sh"
   },
   "repository": {
     "type": "git",

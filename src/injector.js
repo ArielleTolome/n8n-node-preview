@@ -13,6 +13,7 @@
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
+  const API_KEY_STORAGE = 'n8n-preview-apikey';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
   const TOGGLE_ID = 'n8n-preview-toggle';
@@ -25,6 +26,7 @@
   const DEBOUNCE_MS = 150;
   const WS_RECONNECT_DELAY = 3000;
   const WS_MAX_RETRIES = 5;
+  const MAX_BINARY_ITEMS = 50;
   const MAX_BINARY_ITEMS = 50;
 
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
@@ -52,6 +54,7 @@
   let pollingActive = true;
   let pollTimer = null;
   const executingNodes = new Set();
+  let currentWorkflowUrl = location.href;
 
   function loadSettings() {
     try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) }; }
@@ -70,6 +73,33 @@
   function debounce(fn, ms) {
     let timer;
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+  }
+
+
+  // --- Theme Detection ---
+  function detectTheme() {
+    const html = document.documentElement;
+    if (html.getAttribute('data-theme') === 'light' || html.classList.contains('light') ||
+        document.body.classList.contains('light')) return 'light';
+    return 'dark';
+  }
+  function themeBg() { return detectTheme() === 'dark' ? '#1a1a2e' : '#f0f0f5'; }
+
+  // --- API Auth Helper ---
+  async function apiRequest(url, opts = {}) {
+    const headers = { 'Accept': 'application/json', ...(opts.headers || {}) };
+    const apiKey = localStorage.getItem(API_KEY_STORAGE);
+    if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
+    const resp = await originalFetch(url, { ...opts, credentials: 'include', headers });
+    if (resp.status === 401 && !localStorage.getItem(API_KEY_STORAGE)) {
+      const key = prompt('[N8N Preview] Auth failed (401).\nEnter your N8N API key:');
+      if (key && key.trim()) {
+        localStorage.setItem(API_KEY_STORAGE, key.trim());
+        headers['X-N8N-API-KEY'] = key.trim();
+        return originalFetch(url, { ...opts, credentials: 'include', headers });
+      }
+    }
+    return resp;
   }
 
   // ─── CSS ────────────────────────────────────────────────
@@ -200,6 +230,7 @@
         overflow-x: auto; overflow-y: hidden; max-width: 280px;
         scrollbar-width: thin; scrollbar-color: rgba(255,152,0,0.4) transparent;
         animation: n8nPreviewSlideIn 0.3s ease-out;
+        -webkit-overflow-scrolling: touch;
       }
       .n8n-preview-container::-webkit-scrollbar { height: 4px; }
       .n8n-preview-container::-webkit-scrollbar-thumb { background: rgba(255,152,0,0.4); border-radius: 2px; }
@@ -1125,6 +1156,19 @@
   }
 
   // ─── Generic File Preview ─────────────────────────────
+  function createErrorPreview(nodeName, errorMsg) {
+    const sz = getItemSize();
+    const w = document.createElement('div');
+    w.className = 'n8n-preview-item';
+    w.style.cssText = 'width:' + sz + 'px;height:' + sz + 'px;background:#2e1a1a;border-color:rgba(239,83,80,0.3)';
+    w.title = errorMsg || 'Node error';
+    const err = document.createElement('div');
+    err.className = 'n8n-preview-item-error';
+    err.innerHTML = '<span style="font-size:16px">\u274C</span><span>' + (errorMsg || 'Error').slice(0, 30) + '</span>';
+    w.appendChild(err);
+    return w;
+  }
+
   function createGenericPreview(item) {
     const sz = getItemSize();
     const w = document.createElement('div');
@@ -1154,7 +1198,7 @@
   }
 
   // ─── Rendering ──────────────────────────────────────────
-  function renderPreviewsOnNode(nodeName, binaryItems, timestamp) {
+  function renderPreviewsOnNode(nodeName, binaryItems, timestamp, errorMsg) {
     if (!previewsEnabled && !settings.autoShow) return;
     const node = findCanvasNode(nodeName);
     if (!node) return;
@@ -1236,12 +1280,15 @@
   // ─── Execution Extraction ───────────────────────────────
   function extractBinaryFromExecution(executionData) {
     const nodeMap = new Map();
+    const errorMap = new Map();
     try {
       const runData = executionData?.data?.resultData?.runData;
       if (!runData) return nodeMap;
       for (const [nodeName, runs] of Object.entries(runData)) {
         const binaries = [];
+        let nodeError = null;
         for (const run of runs) {
+          if (run.error) nodeError = run.error.message || run.error.description || 'Error';
           if (!run?.data?.main) continue;
           for (const og of run.data.main) {
             if (!Array.isArray(og)) continue;
@@ -1259,14 +1306,17 @@
           }
         }
         if (binaries.length > 0) nodeMap.set(nodeName, binaries);
+        else if (nodeError) errorMap.set(nodeName, nodeError);
       }
     } catch (err) { console.warn('[N8N Preview] Extraction error:', err); }
-    return nodeMap;
+    return { nodeMap, errorMap };
   }
 
   function processExecution(executionData) {
-    const nodeMap = extractBinaryFromExecution(executionData);
-    if (nodeMap.size === 0) return;
+    const result = extractBinaryFromExecution(executionData);
+    const nodeMap = result.nodeMap || result;
+    const errorMap = result.errorMap || new Map();
+    if (nodeMap.size === 0 && errorMap.size === 0) return;
     const ts = Date.now();
     executionCount++;
 
@@ -1281,7 +1331,8 @@
       previewCache.set(nodeName, { items: binaries, timestamp: ts });
       renderPreviewsOnNode(nodeName, binaries, ts);
     }
-    console.log(`[N8N Preview] Rendered previews for ${nodeMap.size} node(s)`);
+    for (const [nodeName, msg] of errorMap) renderPreviewsOnNode(nodeName, [], ts, msg);
+    console.log(`[N8N Preview] Rendered: ${nodeMap.size} node(s), ${errorMap.size} error(s)`);
   }
 
   // ─── Fetch Interceptor ──────────────────────────────────
@@ -1303,12 +1354,11 @@
   async function pollExecutions() {
     if (!previewsEnabled) return;
     try {
-      const resp = await originalFetch('/rest/executions?limit=5&includeData=true', {
-        credentials: 'include', headers: { 'Accept': 'application/json' },
-      });
+      const resp = await apiRequest('/rest/executions?limit=5&includeData=true');
       if (!resp.ok) return;
       const body = await resp.json();
-      for (const exec of (body?.data || [])) {
+      const execs = (body?.data || []).sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0));
+      for (const exec of execs) {
         if (!exec.id || exec.id === lastExecutionId) continue;
         if (exec.status !== 'success' && exec.finished !== true) continue;
         lastExecutionId = exec.id;
@@ -1525,12 +1575,7 @@
 
   async function fetchAndProcessExecution(executionId) {
     try {
-      const headers = { 'Accept': 'application/json' };
-      const apiKey = localStorage.getItem('n8n-preview-apikey');
-      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
-      const resp = await originalFetch(`/rest/executions/${encodeURIComponent(executionId)}?includeData=true`, {
-        credentials: 'include', headers,
-      });
+      const resp = await apiRequest(`/rest/executions/${encodeURIComponent(executionId)}?includeData=true`);
       if (!resp.ok) return;
       const body = await resp.json();
       const execData = body.data || body;
@@ -1851,12 +1896,7 @@
 
   async function fetchAndLoadExecution(execId) {
     try {
-      const headers = { 'Accept': 'application/json' };
-      const apiKey = localStorage.getItem('n8n-preview-apikey');
-      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
-      const resp = await originalFetch(`/rest/executions/${encodeURIComponent(execId)}?includeData=true`, {
-        credentials: 'include', headers,
-      });
+      const resp = await apiRequest(`/rest/executions/${encodeURIComponent(execId)}?includeData=true`);
       if (!resp.ok) return;
       const body = await resp.json();
       const data = body.data || body;
@@ -1868,12 +1908,7 @@
 
   async function fetchRecentExecutions() {
     try {
-      const headers = { 'Accept': 'application/json' };
-      const apiKey = localStorage.getItem('n8n-preview-apikey');
-      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
-      const resp = await originalFetch('/rest/executions?limit=20&includeData=true', {
-        credentials: 'include', headers,
-      });
+      const resp = await apiRequest('/rest/executions?limit=20&includeData=true');
       if (!resp.ok) return;
       const body = await resp.json();
       const execs = body.data || [];
@@ -1884,7 +1919,7 @@
         const exists = executionHistory.find(e => e.id === exec.id);
         if (exists) continue;
 
-        const nodeMap = extractBinaryFromExecution(exec);
+        const { nodeMap } = extractBinaryFromExecution(exec);
         executionHistory.unshift({
           id: exec.id,
           status: exec.status || (exec.finished ? 'success' : 'unknown'),
@@ -1909,7 +1944,7 @@
   processExecution = function (executionData) {
     origProcessExecution(executionData);
 
-    const nodeMap = extractBinaryFromExecution(executionData);
+    const { nodeMap } = extractBinaryFromExecution(executionData);
     const id = executionData.id || ('t' + Date.now());
     const exists = executionHistory.find(e => e.id === id);
     if (!exists && nodeMap.size > 0) {
@@ -1937,6 +1972,181 @@
     }
   });
 
+  // ─── Error Node Rendering ──────────────────────────────
+  function renderErrorOnNode(nodeName, errorMessage) {
+    const node = findCanvasNode(nodeName);
+    if (!node) return;
+    // Remove existing error state
+    const existing = node.querySelector('.n8n-preview-error-state');
+    if (existing) existing.remove();
+
+    const errWrap = document.createElement('div');
+    errWrap.className = 'n8n-preview-error-state';
+    const icon = document.createElement('div');
+    icon.className = 'n8n-preview-error-icon';
+    icon.textContent = '\u274C';
+    const msg = document.createElement('div');
+    msg.className = 'n8n-preview-error-msg';
+    msg.textContent = errorMessage || 'Node execution failed';
+    msg.title = errorMessage || '';
+    errWrap.appendChild(icon);
+    errWrap.appendChild(msg);
+    node.appendChild(errWrap);
+  }
+
+  // Extract error info from execution data
+  function extractErrorsFromExecution(executionData) {
+    const errors = new Map();
+    try {
+      const runData = executionData?.data?.resultData?.runData;
+      if (!runData) return errors;
+      for (const [nodeName, runs] of Object.entries(runData)) {
+        for (const run of runs) {
+          if (run.error) {
+            errors.set(nodeName, run.error.message || run.error.description || 'Error');
+          }
+        }
+      }
+      // Also check top-level execution error
+      const lastErr = executionData?.data?.resultData?.error;
+      if (lastErr) {
+        const lastNode = executionData?.data?.resultData?.lastNodeExecuted;
+        if (lastNode && !errors.has(lastNode)) {
+          errors.set(lastNode, lastErr.message || 'Workflow error');
+        }
+      }
+    } catch { /* ignore */ }
+    return errors;
+  }
+
+  // Patch processExecution to also show errors
+  const _origProcExec = processExecution;
+  processExecution = function (executionData) {
+    _origProcExec(executionData);
+    const errors = extractErrorsFromExecution(executionData);
+    for (const [nodeName, errMsg] of errors) {
+      renderErrorOnNode(nodeName, errMsg);
+    }
+  };
+
+  // ─── API Key Fallback ─────────────────────────────────
+  let apiKeyPrompted = false;
+  const origPollExecutions = pollExecutions;
+  pollExecutions = async function () {
+    if (!previewsEnabled) return;
+    try {
+      const headers = { 'Accept': 'application/json' };
+      const apiKey = localStorage.getItem('n8n-preview-apikey');
+      if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
+      const resp = await originalFetch('/rest/executions?limit=5&includeData=true', {
+        credentials: 'include', headers,
+      });
+      if (resp.status === 401 && !apiKeyPrompted) {
+        apiKeyPrompted = true;
+        const key = prompt('[N8N Preview] API authentication required.\nEnter your N8N API key:');
+        if (key) {
+          localStorage.setItem('n8n-preview-apikey', key);
+          console.log('[N8N Preview] API key saved');
+          return pollExecutions();
+        }
+        return;
+      }
+      if (!resp.ok) return;
+      const body = await resp.json();
+      for (const exec of (body?.data || [])) {
+        if (!exec.id || exec.id === lastExecutionId) continue;
+        if (exec.status !== 'success' && exec.finished !== true) continue;
+        lastExecutionId = exec.id;
+        processExecution(exec);
+        break;
+      }
+    } catch (err) { console.warn('[N8N Preview] Poll error:', err.message); }
+  };
+
+  // ─── Multi-Workflow URL Change Detection ──────────────
+  let lastWorkflowUrl = window.location.pathname;
+
+  function checkWorkflowChange() {
+    const current = window.location.pathname;
+    if (current !== lastWorkflowUrl) {
+      lastWorkflowUrl = current;
+      // Clear previews on workflow switch
+      previewCache.clear();
+      lastExecutionId = null;
+      document.querySelectorAll(
+        '.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge, .n8n-preview-error-state, .n8n-preview-spinner'
+      ).forEach(el => el.remove());
+      document.querySelectorAll('.n8n-preview-executing').forEach(el => el.classList.remove('n8n-preview-executing'));
+      executingNodes.clear();
+      console.log('[N8N Preview] Workflow changed, cleared previews');
+    }
+  }
+
+  // Listen for SPA navigation
+  const origPushState = history.pushState;
+  history.pushState = function (...args) {
+    origPushState.apply(this, args);
+    checkWorkflowChange();
+  };
+  const origReplaceState = history.replaceState;
+  history.replaceState = function (...args) {
+    origReplaceState.apply(this, args);
+    checkWorkflowChange();
+  };
+  window.addEventListener('popstate', checkWorkflowChange);
+
+  // ─── Large Execution Cap ──────────────────────────────
+  // Patch extractBinaryFromExecution to cap at MAX_BINARY_ITEMS
+  const _origExtract = extractBinaryFromExecution;
+  extractBinaryFromExecution = function (executionData) {
+    const nodeMap = _origExtract(executionData);
+    let totalItems = 0;
+    for (const [, bins] of nodeMap) totalItems += bins.length;
+
+    if (totalItems > MAX_BINARY_ITEMS) {
+      console.warn('[N8N Preview] Large execution: ' + totalItems + ' items, capping at ' + MAX_BINARY_ITEMS);
+      let remaining = MAX_BINARY_ITEMS;
+      for (const [nodeName, bins] of nodeMap) {
+        if (remaining <= 0) {
+          nodeMap.delete(nodeName);
+          continue;
+        }
+        if (bins.length > remaining) {
+          nodeMap.set(nodeName, bins.slice(0, remaining));
+        }
+        remaining -= Math.min(bins.length, remaining);
+      }
+    }
+    return nodeMap;
+  };
+
+
+  // --- Workflow Change Detection ---
+  function watchWorkflowChanges() {
+    const check = () => {
+      const url = location.href;
+      if (url !== currentWorkflowUrl) {
+        const oldWf = currentWorkflowUrl.split('/workflow/')[1]?.split(/[?#]/)[0] || '';
+        const newWf = url.split('/workflow/')[1]?.split(/[?#]/)[0] || '';
+        currentWorkflowUrl = url;
+        if (oldWf !== newWf && oldWf && newWf) {
+          previewCache.clear();
+          for (const n of executingNodes) removeNodeSpinner(n);
+          executingNodes.clear();
+          document.querySelectorAll('.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge').forEach(el => el.remove());
+          lastExecutionId = null;
+          console.log('[N8N Preview] Workflow changed, cleared previews');
+        }
+      }
+    };
+    for (const m of ['pushState', 'replaceState']) {
+      const orig = history[m];
+      history[m] = function (...a) { const r = orig.apply(this, a); check(); return r; };
+    }
+    window.addEventListener('popstate', check);
+    setInterval(check, 2000);
+  }
+
   // ─── Init ───────────────────────────────────────────────
   injectStyles();
   injectBadge();
@@ -1945,6 +2155,7 @@
   injectLightbox();
   injectHistoryPanel();
   watchCanvasChanges();
+  watchWorkflowChanges();
   // Start WS, fall back to polling
   setTimeout(() => {
     connectWebSocket();
