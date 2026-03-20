@@ -16,7 +16,8 @@
   const TOGGLE_ID = 'n8n-preview-toggle';
   const LIGHTBOX_ID = 'n8n-preview-lightbox';
   const POLL_INTERVAL = 4000;
-  const MAX_IMAGES_VISIBLE = 4;
+  const MAX_ITEMS_VISIBLE = 4;
+  const VIDEO_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5MB — embed inline below this
 
   /** @returns {boolean} True if injector already initialized */
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
@@ -191,6 +192,42 @@
       }
       .n8n-preview-more:hover {
         background: rgba(255,152,0,0.25);
+      }
+
+      /* Video preview item */
+      .n8n-preview-item video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .n8n-preview-video-play {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.4);
+        color: #fff;
+        font-size: 22px;
+        pointer-events: none;
+        transition: background 0.15s;
+      }
+      .n8n-preview-item:hover .n8n-preview-video-play {
+        background: rgba(0,0,0,0.2);
+      }
+      .n8n-preview-meta {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        padding: 1px 4px;
+        background: rgba(0,0,0,0.6);
+        color: #ff9800;
+        font-size: 7px;
+        font-weight: 600;
+        border-radius: 3px;
+        text-transform: uppercase;
+        line-height: 1.3;
       }
 
       /* Lightbox */
@@ -407,9 +444,116 @@
   // ─── Preview Rendering ──────────────────────────────────
 
   /**
+   * Formats byte size to human-readable string.
+   * @param {number} bytes
+   * @returns {string}
+   */
+  function formatSize(bytes) {
+    if (!bytes || bytes <= 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  /**
+   * Builds the binary data URL for a given item.
+   * @param {string} id
+   * @returns {string}
+   */
+  function binaryUrl(id) {
+    return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`;
+  }
+
+  /**
+   * Creates a preview element for an image item.
+   * @param {{id: string, mimeType: string, fileName: string, fileSize?: number}} item
+   * @returns {HTMLElement}
+   */
+  function createImagePreview(item) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'n8n-preview-item';
+
+    const img = document.createElement('img');
+    img.src = binaryUrl(item.id);
+    img.alt = item.fileName || 'preview';
+    img.loading = 'lazy';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'n8n-preview-overlay';
+    const ext = item.mimeType.split('/')[1] || '';
+    overlay.textContent = item.fileName || ext.toUpperCase();
+
+    wrapper.appendChild(img);
+    wrapper.appendChild(overlay);
+
+    wrapper.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLightbox(img.src, item.mimeType, item.fileName || 'image');
+    });
+
+    return wrapper;
+  }
+
+  /**
+   * Creates a preview element for a video item.
+   * For small videos (<5MB): inline muted video.
+   * For large videos: placeholder with play button overlay.
+   * @param {{id: string, mimeType: string, fileName: string, fileSize?: number}} item
+   * @returns {HTMLElement}
+   */
+  function createVideoPreview(item) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'n8n-preview-item';
+    const src = binaryUrl(item.id);
+    const isSmall = !item.fileSize || item.fileSize < VIDEO_INLINE_MAX_BYTES;
+
+    if (isSmall) {
+      const video = document.createElement('video');
+      video.src = src;
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      // Auto-play on hover
+      wrapper.addEventListener('mouseenter', () => video.play().catch(() => {}));
+      wrapper.addEventListener('mouseleave', () => { video.pause(); video.currentTime = 0; });
+      wrapper.appendChild(video);
+    } else {
+      // Large video — show placeholder with play icon
+      wrapper.style.background = '#0d0d1a';
+      const playOverlay = document.createElement('div');
+      playOverlay.className = 'n8n-preview-video-play';
+      playOverlay.textContent = '\u25B6';
+      wrapper.appendChild(playOverlay);
+    }
+
+    // Format/size metadata badge
+    const ext = item.mimeType.split('/')[1] || 'video';
+    const meta = document.createElement('div');
+    meta.className = 'n8n-preview-meta';
+    const sizeStr = item.fileSize ? formatSize(item.fileSize) : '';
+    meta.textContent = sizeStr ? `${ext} \u2022 ${sizeStr}` : ext;
+    wrapper.appendChild(meta);
+
+    // Overlay with filename
+    const overlay = document.createElement('div');
+    overlay.className = 'n8n-preview-overlay';
+    overlay.textContent = item.fileName || ext.toUpperCase();
+    wrapper.appendChild(overlay);
+
+    wrapper.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLightbox(src, item.mimeType, item.fileName || 'video');
+    });
+
+    return wrapper;
+  }
+
+  /**
    * Renders preview thumbnails onto a canvas node.
+   * Handles both image/* and video/* binary items.
    * @param {string} nodeName - Workflow node name
-   * @param {Array<{id: string, mimeType: string, fileName: string}>} binaryItems
+   * @param {Array<{id: string, mimeType: string, fileName: string, fileSize?: number}>} binaryItems
    */
   function renderPreviewsOnNode(nodeName, binaryItems) {
     if (!previewsEnabled) return;
@@ -421,38 +565,22 @@
     const existing = node.querySelector('.n8n-preview-container');
     if (existing) existing.remove();
 
-    const imageItems = binaryItems.filter(b => b.mimeType.startsWith('image/'));
-    if (imageItems.length === 0) return;
+    const mediaItems = binaryItems.filter(b =>
+      b.mimeType.startsWith('image/') || b.mimeType.startsWith('video/')
+    );
+    if (mediaItems.length === 0) return;
 
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
 
-    const visibleItems = imageItems.slice(0, MAX_IMAGES_VISIBLE);
-    const remaining = imageItems.length - MAX_IMAGES_VISIBLE;
+    const visibleItems = mediaItems.slice(0, MAX_ITEMS_VISIBLE);
+    const remaining = mediaItems.length - MAX_ITEMS_VISIBLE;
 
     for (const item of visibleItems) {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'n8n-preview-item';
-
-      const img = document.createElement('img');
-      img.src = `/rest/data/binary-data?id=${encodeURIComponent(item.id)}&action=view`;
-      img.alt = item.fileName || 'preview';
-      img.loading = 'lazy';
-
-      const overlay = document.createElement('div');
-      overlay.className = 'n8n-preview-overlay';
-      const ext = item.mimeType.split('/')[1] || '';
-      overlay.textContent = item.fileName || ext.toUpperCase();
-
-      wrapper.appendChild(img);
-      wrapper.appendChild(overlay);
-
-      wrapper.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openLightbox(img.src, item.mimeType, item.fileName || 'image');
-      });
-
-      container.appendChild(wrapper);
+      const el = item.mimeType.startsWith('video/')
+        ? createVideoPreview(item)
+        : createImagePreview(item);
+      container.appendChild(el);
     }
 
     if (remaining > 0) {
@@ -461,13 +589,9 @@
       more.textContent = `+${remaining} more`;
       more.addEventListener('click', (e) => {
         e.stopPropagation();
-        const next = imageItems[MAX_IMAGES_VISIBLE];
+        const next = mediaItems[MAX_ITEMS_VISIBLE];
         if (next) {
-          openLightbox(
-            `/rest/data/binary-data?id=${encodeURIComponent(next.id)}&action=view`,
-            next.mimeType,
-            next.fileName || 'image'
-          );
+          openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'media');
         }
       });
       container.appendChild(more);
@@ -508,6 +632,7 @@
                     id: binaryData.id,
                     mimeType: binaryData.mimeType,
                     fileName: binaryData.fileName || '',
+                    fileSize: binaryData.fileSize || 0,
                   });
                 }
               }
