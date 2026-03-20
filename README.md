@@ -1,6 +1,10 @@
-# N8N Node Preview
+# N8N Node Preview (injector)
 
 Live image and video previews directly on N8N canvas nodes — like ComfyUI, but for N8N.
+
+> **Companion repos:**
+> - **[n8n-node-preview](https://github.com/ArielleTolome/n8n-node-preview)** ← This repo — Injector.js + nginx configs
+> - **[n8n-nodes-preview](https://github.com/ArielleTolome/n8n-nodes-preview)** — N8N community node package (Preview node type)
 
 Injects a lightweight JavaScript file via Nginx `sub_filter` that watches executions, extracts binary outputs, and renders preview thumbnails directly on the canvas.
 
