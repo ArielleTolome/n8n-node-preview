@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.3.0';
+  const VERSION = '2.4.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -367,6 +367,25 @@ else { window.__n8nPreviewLoaded = true;
         vertical-align: middle;
         opacity: 0.85;
         pointer-events: none;
+      }
+      .n8n-preview-placeholder {
+        margin-top: 6px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-family: system-ui, sans-serif;
+        text-align: center;
+        animation: n8n-preview-fade-in 0.3s ease;
+      }
+      .n8n-preview-placeholder.waiting {
+        background: rgba(255,152,0,0.10);
+        border: 1px solid rgba(255,152,0,0.30);
+        color: #e65100;
+      }
+      .n8n-preview-placeholder.error {
+        background: rgba(220,53,69,0.12);
+        border: 1px solid rgba(220,53,69,0.35);
+        color: #dc3545;
       }
       .n8n-preview-node-label {
         display: inline-block;
@@ -776,10 +795,7 @@ else { window.__n8nPreviewLoaded = true;
 
     const clearBtn = document.createElement('button');
     clearBtn.className = 'n8n-settings-btn'; clearBtn.textContent = 'Clear All Previews';
-    clearBtn.addEventListener('click', () => {
-      previewCache.clear();
-      document.querySelectorAll('.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge').forEach(el => el.remove());
-    });
+    clearBtn.addEventListener('click', () => { removeAllPreviews(); });
     panel.appendChild(clearBtn);
 
     const ver = document.createElement('div');
@@ -901,6 +917,21 @@ else { window.__n8nPreviewLoaded = true;
     return `/rest/data/binary-data?id=${encodeURIComponent(id)}&action=view`;
   }
 
+  // Load an image/video URL with 404 retry after 1500ms
+  function loadMediaWithRetry(el, src, retryDelay) {
+    if (!el) return;
+    el.src = src;
+    const onError = () => {
+      if (el.dataset.retried) return;
+      el.dataset.retried = '1';
+      setTimeout(() => {
+        // bust cache on retry
+        el.src = src + (src.includes('?') ? '&' : '?') + '_retry=' + Date.now();
+      }, retryDelay || 1500);
+    };
+    el.addEventListener('error', onError, { once: false });
+  }
+
   function formatSize(bytes) {
     if (!bytes || bytes <= 0) return '';
     if (bytes < 1024) return bytes + ' B';
@@ -924,19 +955,18 @@ else { window.__n8nPreviewLoaded = true;
     w.className = 'n8n-preview-item';
     w.style.height = sz + 'px';
     const img = document.createElement('img');
-    img.src = binaryUrl(item.id); img.alt = item.fileName || 'preview'; img.loading = 'lazy';
-    // Retry once on error
-    let retried = false;
+    img.alt = item.fileName || 'preview'; img.loading = 'lazy';
+    // Retry once on 404/error after 1500ms
+    loadMediaWithRetry(img, binaryUrl(item.id), 1500);
     img.onerror = () => {
-      if (!retried) {
-        retried = true;
-        setTimeout(() => { img.src = binaryUrl(item.id); }, 1000);
-      } else {
+      if (img.dataset.retried && img.dataset.finalError) {
         while (w.firstChild) w.removeChild(w.firstChild);
         const errEl = document.createElement('div');
         errEl.className = 'n8n-preview-item-error';
         errEl.textContent = 'Preview unavailable';
         w.appendChild(errEl);
+      } else if (img.dataset.retried) {
+        img.dataset.finalError = '1';
       }
     };
     const ov = document.createElement('div');
@@ -1360,7 +1390,36 @@ else { window.__n8nPreviewLoaded = true;
     // Apply maxItems from Preview node params
     const maxVisible = (nodeParams && nodeParams.maxItems) ? nodeParams.maxItems : MAX_ITEMS_VISIBLE;
 
-    if (previewItems.length === 0) return;
+    if (previewItems.length === 0) {
+      // For dedicated Preview nodes: show waiting/error placeholder instead of silently returning
+      if (isPNode) {
+        // Remove old placeholder first
+        const oldPlaceholder = node.querySelector('.n8n-preview-placeholder');
+        if (oldPlaceholder) oldPlaceholder.remove();
+
+        const placeholder = document.createElement('div');
+        placeholder.className = 'n8n-preview-placeholder';
+        placeholder.style.cssText = 'margin-top:6px;padding:8px 12px;border-radius:8px;font-size:11px;font-family:system-ui,sans-serif;text-align:center;';
+
+        if (errorMsg) {
+          // Error state — red card
+          placeholder.style.cssText += 'background:rgba(220,53,69,0.12);border:1px solid rgba(220,53,69,0.35);color:#dc3545;';
+          placeholder.innerHTML = '⚠️ <strong>Error:</strong> ' + String(errorMsg).replace(/</g, '&lt;').slice(0, 120);
+        } else {
+          // Waiting state — orange-tinted card
+          placeholder.style.cssText += 'background:rgba(255,152,0,0.10);border:1px solid rgba(255,152,0,0.30);color:#e65100;';
+          placeholder.textContent = '⏳ Waiting for output...';
+        }
+
+        node.style.position = node.style.position || 'relative';
+        node.appendChild(placeholder);
+      }
+      return;
+    }
+
+    // Remove any waiting placeholder now that we have real items
+    const oldPlaceholder = node.querySelector('.n8n-preview-placeholder');
+    if (oldPlaceholder) oldPlaceholder.remove();
 
     const header = document.createElement('div'); header.className = 'n8n-preview-header';
     const tsEl = document.createElement('span'); tsEl.className = 'n8n-preview-timestamp';
@@ -1561,6 +1620,29 @@ else { window.__n8nPreviewLoaded = true;
     } catch { /* never break fetch */ }
     return response;
   };
+
+  // ─── Remove All Previews ────────────────────────────────
+  // Cleans up all preview containers, headers, badges, placeholders, and camera badges from DOM
+  // Also clears the previewCache and node-specific classes
+  function removeAllPreviews() {
+    previewCache.clear();
+    for (const sel of [
+      '.n8n-preview-container',
+      '.n8n-preview-header',
+      '.n8n-preview-count-badge',
+      '.n8n-preview-placeholder',
+      '.n8n-preview-node-label',
+      '.n8n-preview-camera-badge',
+    ]) {
+      document.querySelectorAll(sel).forEach(el => el.remove());
+    }
+    // Remove dedicated node class from all nodes
+    document.querySelectorAll('.n8n-preview-dedicated-node').forEach(node => {
+      node.classList.remove('n8n-preview-dedicated-node');
+      node.style.overflow = '';
+    });
+    console.log('[N8N Preview] Removed all previews');
+  }
 
   // ─── Polling ────────────────────────────────────────────
   async function pollExecutions() {
@@ -2093,8 +2175,7 @@ else { window.__n8nPreviewLoaded = true;
 
       if (exec.nodes && exec.nodes.size > 0) {
         // Clear current previews
-        document.querySelectorAll('.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge').forEach(el => el.remove());
-        previewCache.clear();
+        removeAllPreviews();
 
         // Load this execution's previews
         const ts = exec.stoppedAt ? new Date(exec.stoppedAt).getTime() : Date.now();
@@ -2289,12 +2370,13 @@ else { window.__n8nPreviewLoaded = true;
         const newWf = url.split('/workflow/')[1]?.split(/[/?#]/)[0] || '';
         currentWorkflowUrl = url;
         if (oldWf !== newWf && oldWf && newWf) {
-          previewCache.clear();
+          removeAllPreviews();
           for (const n of executingNodes) removeNodeSpinner(n);
           executingNodes.clear();
-          document.querySelectorAll('.n8n-preview-container, .n8n-preview-header, .n8n-preview-count-badge').forEach(el => el.remove());
           lastExecutionId = null;
-          console.log('[N8N Preview] Workflow changed, cleared previews');
+          // Also clear workflow param cache when switching workflows
+          workflowCache.clear();
+          console.log('[N8N Preview] Workflow changed, cleared all previews');
         }
       }
     };
