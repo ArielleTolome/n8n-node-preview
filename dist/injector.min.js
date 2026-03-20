@@ -1164,7 +1164,13 @@
     w.title = errorMsg || 'Node error';
     const err = document.createElement('div');
     err.className = 'n8n-preview-item-error';
-    err.innerHTML = '<span style="font-size:16px">\u274C</span><span>' + (errorMsg || 'Error').slice(0, 30) + '</span>';
+    const errIcon = document.createElement('span');
+    errIcon.style.fontSize = '16px';
+    errIcon.textContent = '\u274C';
+    const errText = document.createElement('span');
+    errText.textContent = (errorMsg || 'Error').slice(0, 30);
+    err.appendChild(errIcon);
+    err.appendChild(errText);
     w.appendChild(err);
     return w;
   }
