@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.2';
+  const VERSION = '2.0.3';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -30,7 +30,7 @@ else { window.__n8nPreviewLoaded = true;
   const WS_RECONNECT_DELAY = 3000;
   const WS_MAX_RETRIES = 5;
   const MAX_BINARY_ITEMS = 50;
-  const MAX_BINARY_ITEMS = 50;
+
 
   const isAlreadyLoaded = () => !!document.getElementById(STYLE_ID);
   if (isAlreadyLoaded()) return;
