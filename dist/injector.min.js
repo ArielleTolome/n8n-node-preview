@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.7';
+  const VERSION = '2.0.8';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -69,8 +69,9 @@ else { window.__n8nPreviewLoaded = true;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }
 
-  const sizeMap = { small: 48, medium: 64, large: 96 };
-  function getItemSize() { return sizeMap[settings.previewSize] || 64; }
+  // Heights for the Weavy-style large card layout (width always fills node)
+  const sizeMap = { small: 160, medium: 220, large: 300 };
+  function getItemSize() { return sizeMap[settings.previewSize] || 220; }
 
   // ─── Debounce utility ───────────────────────────────────
   function debounce(fn, ms) {
@@ -228,18 +229,15 @@ else { window.__n8nPreviewLoaded = true;
       }
 
       .n8n-preview-container {
-        display: flex; flex-wrap: nowrap; gap: 6px;
-        padding: 6px 8px; margin-top: 4px;
-        overflow-x: auto; overflow-y: hidden; max-width: 280px;
-        scrollbar-width: thin; scrollbar-color: rgba(255,152,0,0.4) transparent;
+        display: flex; flex-direction: column; gap: 6px;
+        padding: 6px 0; margin-top: 6px;
+        width: 100%; min-width: 200px;
+        overflow: visible;
         animation: n8nPreviewSlideIn 0.3s ease-out;
-        -webkit-overflow-scrolling: touch;
       }
-      .n8n-preview-container::-webkit-scrollbar { height: 4px; }
-      .n8n-preview-container::-webkit-scrollbar-thumb { background: rgba(255,152,0,0.4); border-radius: 2px; }
       @keyframes n8nPreviewSlideIn {
-        from { opacity: 0; max-height: 0; }
-        to { opacity: 1; max-height: 200px; }
+        from { opacity: 0; transform: translateY(-6px); }
+        to { opacity: 1; transform: translateY(0); }
       }
 
       .n8n-preview-header {
@@ -251,13 +249,15 @@ else { window.__n8nPreviewLoaded = true;
       .n8n-preview-output-label { color: #ff9800; font-weight: 600; }
 
       .n8n-preview-item {
-        position: relative; flex-shrink: 0;
-        border-radius: 6px; overflow: hidden; cursor: pointer;
-        border: 1px solid rgba(255,255,255,0.1); background: #1a1a2e;
-        transition: transform 0.15s, box-shadow 0.15s;
+        position: relative; width: 100%;
+        border-radius: 8px; overflow: hidden; cursor: pointer;
+        border: 1px solid rgba(255,255,255,0.08); background: #111118;
+        transition: box-shadow 0.2s, border-color 0.2s;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
       }
       .n8n-preview-item:hover {
-        transform: scale(1.08); box-shadow: 0 2px 8px rgba(255,152,0,0.3);
+        box-shadow: 0 4px 16px rgba(255,152,0,0.25);
+        border-color: rgba(255,152,0,0.35);
       }
       .n8n-preview-item img, .n8n-preview-item video {
         width: 100%; height: 100%; object-fit: cover; display: block;
@@ -687,16 +687,17 @@ else { window.__n8nPreviewLoaded = true;
     const sizeRow = document.createElement('div'); sizeRow.className = 'n8n-settings-row';
     const sizeLabel = document.createElement('span'); sizeLabel.textContent = 'Preview size';
     const sizeSelect = document.createElement('select'); sizeSelect.className = 'n8n-settings-select';
+    const sizeLabels = { small: 'small (160px)', medium: 'medium (220px)', large: 'large (300px)' };
     for (const opt of ['small', 'medium', 'large']) {
       const o = document.createElement('option');
-      o.value = opt; o.textContent = opt; if (settings.previewSize === opt) o.selected = true;
+      o.value = opt; o.textContent = sizeLabels[opt]; if (settings.previewSize === opt) o.selected = true;
       sizeSelect.appendChild(o);
     }
     sizeSelect.addEventListener('change', () => {
       saveSettings({ previewSize: sizeSelect.value });
       const sz = getItemSize();
       document.querySelectorAll('.n8n-preview-item, .n8n-preview-more').forEach(el => {
-        el.style.width = sz + 'px'; el.style.height = sz + 'px';
+        el.style.height = sz + 'px';
       });
     });
     sizeRow.appendChild(sizeLabel); sizeRow.appendChild(sizeSelect);
@@ -828,7 +829,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
     const img = document.createElement('img');
     img.src = binaryUrl(item.id); img.alt = item.fileName || 'preview'; img.loading = 'lazy';
     // Retry once on error
@@ -862,7 +863,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
     const src = binaryUrl(item.id);
     const isSmall = !item.fileSize || item.fileSize < VIDEO_INLINE_MAX_BYTES;
     if (isSmall) {
@@ -964,7 +965,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
 
     w.appendChild(makeFileIcon('\uD83D\uDCC4', 'PDF'));
     w.appendChild(createActionButtons(item));
@@ -1019,7 +1020,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
 
     w.appendChild(makeFileIcon('{ }', 'JSON'));
     w.appendChild(createActionButtons(item));
@@ -1067,7 +1068,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
 
     w.appendChild(makeFileIcon('\uD83D\uDCCA', 'CSV'));
     w.appendChild(createActionButtons(item));
@@ -1133,7 +1134,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
 
     const wave = document.createElement('div');
     wave.className = 'n8n-preview-audio-wave';
@@ -1201,7 +1202,7 @@ else { window.__n8nPreviewLoaded = true;
     const sz = getItemSize();
     const w = document.createElement('div');
     w.className = 'n8n-preview-item';
-    w.style.width = sz + 'px'; w.style.height = sz + 'px';
+    w.style.height = sz + 'px';
     const ext = (item.mimeType.split('/')[1] || item.fileName?.split('.').pop() || 'file').toUpperCase();
     w.appendChild(makeFileIcon('\uD83D\uDCC1', ext.slice(0, 5)));
     w.appendChild(createActionButtons(item));
@@ -1280,7 +1281,7 @@ else { window.__n8nPreviewLoaded = true;
     if (remaining > 0) {
       const more = document.createElement('div');
       more.className = 'n8n-preview-more';
-      more.style.width = sz + 'px'; more.style.height = sz + 'px';
+      more.style.height = '36px'; more.style.width = '100%';
       more.textContent = '+' + remaining;
       more.addEventListener('click', (e) => {
         e.stopPropagation();
