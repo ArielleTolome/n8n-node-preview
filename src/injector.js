@@ -1,7 +1,11 @@
 /**
- * N8N Node Preview Injector v2.0.2
+ * N8N Node Preview Injector v3.0.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
+ *
+ * Features: canvas previews, 2-col grid, dimensions overlay, batch download,
+ * gallery panel, re-run button, live timers, completion toast, lightbox with
+ * arrow nav + zoom + title bar, execution history, compare mode.
  *
  * @license MIT
  * @author Ariel Tolome
@@ -12,7 +16,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.9.0';
+  const VERSION = '3.0.0';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
