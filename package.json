@@ -1,6 +1,6 @@
 {
   "name": "n8n-node-preview",
-  "version": "0.5.0",
+  "version": "0.2.0",
   "description": "Live image & video previews on N8N canvas nodes via Nginx injection",
   "main": "src/injector.js",
   "scripts": {
