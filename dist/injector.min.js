@@ -1,5 +1,5 @@
 /**
- * N8N Node Preview Injector v0.2.0
+ * N8N Node Preview Injector v0.4.0
  * Adds live image & video previews directly onto N8N canvas nodes.
  * Injected via Nginx sub_filter into the N8N HTML page.
  *
@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.4.0';
   const STORAGE_KEY = 'n8n-preview-settings';
   const STYLE_ID = 'n8n-preview-styles';
   const BADGE_ID = 'n8n-preview-badge';
@@ -271,6 +271,47 @@
         line-height: 1;
       }
       .n8n-lightbox-close:hover { opacity: 1; }
+
+      /* Preview header bar (timestamp + count) */
+      .n8n-preview-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 2px 8px;
+        font-size: 9px;
+        color: #999;
+        font-family: monospace;
+        line-height: 1.4;
+      }
+      .n8n-preview-timestamp {
+        opacity: 0.7;
+      }
+      .n8n-preview-output-label {
+        color: #ff9800;
+        font-weight: 600;
+      }
+
+      /* Count badge on node when previews are hidden */
+      .n8n-preview-count-badge {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 9px;
+        background: #ff9800;
+        color: #fff;
+        font-size: 10px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+        z-index: 10;
+        pointer-events: none;
+        line-height: 1;
+      }
     `;
     document.head.appendChild(style);
   };
@@ -347,8 +388,18 @@
   /** @param {boolean} show */
   function toggleAllPreviews(show) {
     document.querySelectorAll('.n8n-preview-container').forEach(el => {
-      el.style.display = show ? 'flex' : 'none';
+      el.style.display = show ? '' : 'none';
     });
+    // Update count badges on all cached nodes
+    for (const [nodeName, data] of previewCache) {
+      const node = findCanvasNode(nodeName);
+      if (node) {
+        const mediaCount = data.items.filter(b =>
+          b.mimeType.startsWith('image/') || b.mimeType.startsWith('video/')
+        ).length;
+        updateCountBadge(node, mediaCount);
+      }
+    }
   }
 
   // ─── Lightbox ───────────────────────────────────────────
@@ -456,6 +507,20 @@
   }
 
   /**
+   * Returns a human-readable "X ago" string from a timestamp.
+   * @param {number} ts - Unix millisecond timestamp
+   * @returns {string}
+   */
+  function timeAgo(ts) {
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 5) return 'just now';
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  /**
    * Builds the binary data URL for a given item.
    * @param {string} id
    * @returns {string}
@@ -550,14 +615,38 @@
   }
 
   /**
+   * Updates or creates a count badge on a node showing how many previews are available.
+   * Shown when previews are hidden.
+   * @param {Element} node - Canvas node element
+   * @param {number} count - Number of media items
+   */
+  function updateCountBadge(node, count) {
+    let badge = node.querySelector('.n8n-preview-count-badge');
+    if (previewsEnabled) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (count === 0) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'n8n-preview-count-badge';
+      node.style.position = node.style.position || 'relative';
+      node.appendChild(badge);
+    }
+    badge.textContent = String(count);
+  }
+
+  /**
    * Renders preview thumbnails onto a canvas node.
    * Handles both image/* and video/* binary items.
+   * Includes timestamp header and output count labels.
    * @param {string} nodeName - Workflow node name
-   * @param {Array<{id: string, mimeType: string, fileName: string, fileSize?: number}>} binaryItems
+   * @param {Array<{id: string, mimeType: string, fileName: string, fileSize?: number, outputKey?: string}>} binaryItems
    */
   function renderPreviewsOnNode(nodeName, binaryItems) {
-    if (!previewsEnabled) return;
-
     const node = findCanvasNode(nodeName);
     if (!node) return;
 
@@ -568,10 +657,40 @@
     const mediaItems = binaryItems.filter(b =>
       b.mimeType.startsWith('image/') || b.mimeType.startsWith('video/')
     );
-    if (mediaItems.length === 0) return;
+
+    // Update count badge (visible when previews hidden, hidden when shown)
+    updateCountBadge(node, mediaItems.length);
+
+    if (mediaItems.length === 0 || !previewsEnabled) return;
 
     const container = document.createElement('div');
     container.className = 'n8n-preview-container n8n-preview-fade-in';
+
+    // Header with timestamp and output count
+    const cached = previewCache.get(nodeName);
+    const header = document.createElement('div');
+    header.className = 'n8n-preview-header';
+
+    const tsSpan = document.createElement('span');
+    tsSpan.className = 'n8n-preview-timestamp';
+    tsSpan.textContent = cached ? `Last run: ${timeAgo(cached.timestamp)}` : '';
+    header.appendChild(tsSpan);
+
+    const countSpan = document.createElement('span');
+    countSpan.className = 'n8n-preview-output-label';
+    const imgCount = mediaItems.filter(b => b.mimeType.startsWith('image/')).length;
+    const vidCount = mediaItems.filter(b => b.mimeType.startsWith('video/')).length;
+    const parts = [];
+    if (imgCount > 0) parts.push(`${imgCount} img`);
+    if (vidCount > 0) parts.push(`${vidCount} vid`);
+    countSpan.textContent = parts.join(' \u2022 ');
+    header.appendChild(countSpan);
+
+    container.appendChild(header);
+
+    // Media strip
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;';
 
     const visibleItems = mediaItems.slice(0, MAX_ITEMS_VISIBLE);
     const remaining = mediaItems.length - MAX_ITEMS_VISIBLE;
@@ -580,7 +699,7 @@
       const el = item.mimeType.startsWith('video/')
         ? createVideoPreview(item)
         : createImagePreview(item);
-      container.appendChild(el);
+      strip.appendChild(el);
     }
 
     if (remaining > 0) {
@@ -594,9 +713,10 @@
           openLightbox(binaryUrl(next.id), next.mimeType, next.fileName || 'media');
         }
       });
-      container.appendChild(more);
+      strip.appendChild(more);
     }
 
+    container.appendChild(strip);
     node.appendChild(container);
   }
 
@@ -626,13 +746,14 @@
             if (!Array.isArray(outputGroup)) continue;
             for (const item of outputGroup) {
               if (!item.binary) continue;
-              for (const [_key, binaryData] of Object.entries(item.binary)) {
+              for (const [key, binaryData] of Object.entries(item.binary)) {
                 if (binaryData.id && binaryData.mimeType) {
                   binaries.push({
                     id: binaryData.id,
                     mimeType: binaryData.mimeType,
                     fileName: binaryData.fileName || '',
                     fileSize: binaryData.fileSize || 0,
+                    outputKey: key,
                   });
                 }
               }
