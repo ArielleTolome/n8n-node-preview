@@ -12,7 +12,7 @@ else { window.__n8nPreviewLoaded = true;
 (function () {
   'use strict';
 
-  const VERSION = '2.0.3';
+  const VERSION = '2.0.4';
   const COMPARE_ID = 'n8n-preview-compare';
   const HISTORY_ID = 'n8n-preview-history';
   const STORAGE_KEY = 'n8n-preview-settings';
@@ -1361,9 +1361,10 @@ else { window.__n8nPreviewLoaded = true;
     const response = await originalFetch.apply(this, args);
     try {
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-      if (url.includes('/rest/executions/') || (url.includes('/rest/workflows/') && url.includes('/run'))) {
+      if (url.includes('/rest/executions/') || url.includes('/api/v1/executions/') || (url.includes('/rest/workflows/') && url.includes('/run'))) {
         response.clone().json().then(data => {
           // N8N wraps execution result in data.data for workflow runs
+          // Public API (/api/v1/) wraps in { data: exec }
           const exec = data?.data ?? data;
           if (exec?.data?.resultData?.runData) {
             console.log('[N8N Preview] Intercepted execution from fetch:', url);
@@ -1379,7 +1380,7 @@ else { window.__n8nPreviewLoaded = true;
   async function pollExecutions() {
     if (!previewsEnabled) return;
     try {
-      const resp = await apiRequest('/rest/executions?limit=5&includeData=true');
+      const resp = await apiRequest('/api/v1/executions?limit=5&includeData=true');
       if (!resp.ok) return;
       const body = await resp.json();
       const execs = (body?.data || []).sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0));
@@ -1600,7 +1601,7 @@ else { window.__n8nPreviewLoaded = true;
 
   async function fetchAndProcessExecution(executionId) {
     try {
-      const resp = await apiRequest(`/rest/executions/${encodeURIComponent(executionId)}?includeData=true`);
+      const resp = await apiRequest(`/api/v1/executions/${encodeURIComponent(executionId)}?includeData=true`);
       if (!resp.ok) return;
       const body = await resp.json();
       const execData = body.data || body;
@@ -1921,7 +1922,7 @@ else { window.__n8nPreviewLoaded = true;
 
   async function fetchAndLoadExecution(execId) {
     try {
-      const resp = await apiRequest(`/rest/executions/${encodeURIComponent(execId)}?includeData=true`);
+      const resp = await apiRequest(`/api/v1/executions/${encodeURIComponent(execId)}?includeData=true`);
       if (!resp.ok) return;
       const body = await resp.json();
       const data = body.data || body;
@@ -1933,7 +1934,7 @@ else { window.__n8nPreviewLoaded = true;
 
   async function fetchRecentExecutions() {
     try {
-      const resp = await apiRequest('/rest/executions?limit=20&includeData=true');
+      const resp = await apiRequest('/api/v1/executions?limit=20&includeData=true');
       if (!resp.ok) return;
       const body = await resp.json();
       const execs = body.data || [];
@@ -2063,7 +2064,7 @@ else { window.__n8nPreviewLoaded = true;
       const headers = { 'Accept': 'application/json' };
       const apiKey = localStorage.getItem('n8n-preview-apikey');
       if (apiKey) headers['X-N8N-API-KEY'] = apiKey;
-      const resp = await originalFetch('/rest/executions?limit=5&includeData=true', {
+      const resp = await originalFetch('/api/v1/executions?limit=5&includeData=true', {
         credentials: 'include', headers,
       });
       if (resp.status === 401 && !apiKeyPrompted) {
